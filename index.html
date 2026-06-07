@@ -8,7 +8,7 @@
 <!-- Supabase JS v2 -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <!-- React 18 + Babel -->
-<script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></hscript>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <!-- SheetJS for Excel export -->
@@ -457,7 +457,7 @@ function AppShell({ session }) {
   const isStaff = profile?.role === 'staff' || isAdmin;
 
   return (
-    <AppCtx.Provider value={{ session, profile, toast, isAdmin, isStaff }}>
+    <AppCtx.Provider value={{ session, profile, toast, toasts, isAdmin, isStaff }}>
       <div style={{display:'flex',flexDirection:'column',height:'100vh'}}>
         <header className="app-header">
           <span className="app-logo" style={{cursor:'pointer'}} onClick={backToList}>Ledger<span>line</span></span>
