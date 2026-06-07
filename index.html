@@ -843,22 +843,203 @@ function UploadGLModal({ engId, onClose, onImported }) {
   const [dragging, setDragging] = useState(false);
   const [preview, setPreview] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [parseInfo, setParseInfo] = useState(null);
+  const [status, setStatus] = useState('');
   const inputRef = useRef();
 
-  const processFile = (file) => {
-    Papa.parse(file, {
-      header: true, skipEmptyLines: true,
-      complete: ({ data }) => {
-        const mapped = data.map(r => ({
-          code: r.Code || r.code || r.AccountCode || '',
-          name: r.Name || r.name || r.AccountName || r.Account || '',
-          type: (r.Type || r.type || r.AccountType || 'ASSET').toUpperCase(),
-          unadj_dr: parseFloat(r.DR || r.Dr || r.Debit || r.debit || 0)||0,
-          unadj_cr: parseFloat(r.CR || r.Cr || r.Credit || r.credit || 0)||0,
-        })).filter(r => r.name);
-        setPreview(mapped);
+  const ALIASES = {
+    code:    ['code','acct','account_code','account code','acct#','account number','account_number','gl_code','gl code','acct no','number','num','no','account no'],
+    name:    ['name','account','account_name','account name','description','desc','account_description','title','account title','gl account','account title'],
+    type:    ['type','account_type','account type','acct_type','acct type','class','classification','category'],
+    debit:   ['debit','dr','dr.','debit_balance','debit balance','debits','ending_debit','ending debit','balance_debit','balance dr','total debit','debit total','debit amount','total_debit'],
+    credit:  ['credit','cr','cr.','credit_balance','credit balance','credits','ending_credit','ending credit','balance_credit','balance cr','total credit','credit total','credit amount','total_credit'],
+    balance: ['balance','net_balance','net balance','net','amount','ending_balance','ending balance','total','ytd balance','period balance'],
+    dcflag:  ['dc','d/c','debit/credit','dr/cr','normal_balance','normal balance','type','dr cr'],
+    date:    ['date','transaction date','trans date','trans_date','post date','posting date','entry date','tran date'],
+    memo:    ['memo','detail','narration','particulars','reference','ref','description','desc','note'],
+  };
+
+  const findCol = (headers, field) => {
+    const aliases = ALIASES[field] || [];
+    for (const h of headers) {
+      const norm = h.toLowerCase().trim().replace(/[\s_]+/g,' ');
+      if (aliases.includes(norm)) return h;
+    }
+    for (const h of headers) {
+      const norm = h.toLowerCase().trim();
+      if (aliases.some(a => norm.includes(a) || a.includes(norm))) return h;
+    }
+    return null;
+  };
+
+  const inferType = (code, name) => {
+    const num = parseInt((code||'').toString().replace(/\D/g,'').substring(0,4)) || 0;
+    const nm = (name||'').toLowerCase();
+    if (num >= 1000 && num < 2000) return 'ASSET';
+    if (num >= 2000 && num < 3000) return 'LIABILITY';
+    if (num >= 3000 && num < 4000) return 'EQUITY';
+    if (num >= 4000 && num < 5000) return 'INCOME';
+    if (num >= 5000 && num < 6000) return 'COGS';
+    if (num >= 6000 && num < 9000) return 'EXPENSE';
+    if (/cash|bank|receiv|invent|prepaid|equipment|vehicle|property|deposit|asset|investment|securities|due from/i.test(nm)) return 'ASSET';
+    if (/payable|loan|mortgage|accrued|liability|note payable|deferred revenue|due to|line of credit|debt/i.test(nm)) return 'LIABILITY';
+    if (/equity|capital|retained|owner|draw|stock|member|contributed|distribution/i.test(nm)) return 'EQUITY';
+    if (/revenue|sales|income|service fee|fees earned|grant|interest income|other income|rental income/i.test(nm)) return 'INCOME';
+    if (/cost of|cogs|purchases|merchandise|cost of sales|material/i.test(nm)) return 'COGS';
+    if (/expense|payroll|salary|wages|rent|util|insurance|deprec|amort|adverti|travel|office|supplies|fuel|phone|internet|repair|professional|legal|account|tax|bank fee|subscription|software/i.test(nm)) return 'EXPENSE';
+    return 'OTHER';
+  };
+
+  const cleanNum = (s) => parseFloat((s||'0').toString().replace(/[\$,\s\(\)]/g,'').replace(/\((.+)\)/,'\u2212$1')) || 0;
+
+  const detectAndMap = (rawRows) => {
+    if (!rawRows || rawRows.length === 0) return { accounts:[], format:'Empty', msg:'No data rows found.' };
+    const rows = rawRows.filter(r => Object.values(r).some(v => v !== '' && v !== null && v !== undefined));
+    if (!rows.length) return { accounts:[], format:'Empty', msg:'No data rows found.' };
+    const headers = Object.keys(rows[0]);
+    const codeCol   = findCol(headers, 'code');
+    const nameCol   = findCol(headers, 'name');
+    const drCol     = findCol(headers, 'debit');
+    const crCol     = findCol(headers, 'credit');
+    const balCol    = findCol(headers, 'balance');
+    const dcCol     = findCol(headers, 'dcflag');
+    const dateCol   = findCol(headers, 'date');
+    const typeCol   = findCol(headers, 'type');
+    const identifierCol = nameCol || codeCol || headers[0];
+    const VALID_TYPES = ['ASSET','LIABILITY','EQUITY','INCOME','COGS','EXPENSE','OTHER'];
+    let accounts = [];
+    let format = 'Trial Balance';
+
+    if (dateCol) {
+      format = 'Detailed General Ledger';
+      const acctMap = {};
+      for (const row of rows) {
+        const acctKey = (row[codeCol] || row[nameCol] || row[identifierCol] || '').toString().trim();
+        const acctName = (row[nameCol] || row[codeCol] || acctKey).toString().trim();
+        if (!acctKey || /^total|^grand total|^subtotal|^balance/i.test(acctKey)) continue;
+        if (!acctMap[acctKey]) acctMap[acctKey] = { code: acctKey, name: acctName, dr: 0, cr: 0 };
+        if (drCol && crCol) {
+          acctMap[acctKey].dr += Math.abs(cleanNum(row[drCol]));
+          acctMap[acctKey].cr += Math.abs(cleanNum(row[crCol]));
+        } else if (balCol) {
+          const amt = cleanNum(row[balCol]);
+          const dc = (row[dcCol]||'').toString().toUpperCase().trim();
+          if (dc==='D'||dc==='DR'||dc==='DEBIT') acctMap[acctKey].dr += Math.abs(amt);
+          else if (dc==='C'||dc==='CR'||dc==='CREDIT') acctMap[acctKey].cr += Math.abs(amt);
+          else if (amt>=0) acctMap[acctKey].dr += amt;
+          else acctMap[acctKey].cr += Math.abs(amt);
+        }
       }
+      accounts = Object.values(acctMap).map(a => ({
+        code: a.code !== a.name ? a.code : '',
+        name: a.name,
+        type: inferType(a.code, a.name),
+        unadj_dr: Math.round(a.dr*100)/100,
+        unadj_cr: Math.round(a.cr*100)/100,
+      }));
+    } else if (drCol && crCol) {
+      format = 'Trial Balance (Debit / Credit)';
+      for (const row of rows) {
+        const name = (row[identifierCol]||'').toString().trim();
+        if (!name || /^total|^grand total|^subtotal/i.test(name)) continue;
+        const code = codeCol ? (row[codeCol]||'').toString().trim() : '';
+        const rawType = (row[typeCol]||'').toString().toUpperCase().trim();
+        accounts.push({
+          code, name,
+          type: VALID_TYPES.includes(rawType) ? rawType : inferType(code, name),
+          unadj_dr: Math.abs(cleanNum(row[drCol])),
+          unadj_cr: Math.abs(cleanNum(row[crCol])),
+        });
+      }
+    } else if (balCol) {
+      format = 'Trial Balance (Net Balance)';
+      for (const row of rows) {
+        const name = (row[identifierCol]||'').toString().trim();
+        if (!name || /^total|^grand total|^subtotal/i.test(name)) continue;
+        const code = codeCol ? (row[codeCol]||'').toString().trim() : '';
+        const bal = cleanNum(row[balCol]);
+        const dc = (row[dcCol]||'').toString().toUpperCase().trim();
+        const rawType = (row[typeCol]||'').toString().toUpperCase().trim();
+        const inferredType = VALID_TYPES.includes(rawType) ? rawType : inferType(code, name);
+        let dr = 0, cr = 0;
+        if (dc==='D'||dc==='DR'||dc==='DEBIT') { dr=Math.abs(bal); }
+        else if (dc==='C'||dc==='CR'||dc==='CREDIT') { cr=Math.abs(bal); }
+        else {
+          const normalDr = ['ASSET','COGS','EXPENSE'].includes(inferredType);
+          if (bal>=0) { if (normalDr) dr=bal; else cr=bal; }
+          else { if (normalDr) cr=Math.abs(bal); else dr=Math.abs(bal); }
+        }
+        accounts.push({ code, name, type: inferredType, unadj_dr: Math.round(dr*100)/100, unadj_cr: Math.round(cr*100)/100 });
+      }
+    } else {
+      format = 'Auto-detected';
+      const numCols = headers.filter(h => {
+        const vals = rows.slice(0,5).map(r=>cleanNum(r[h])).filter(n=>n!==0);
+        return vals.length >= 2;
+      });
+      const guessedDr = numCols[0], guessedCr = numCols[1];
+      for (const row of rows) {
+        const name = (row[identifierCol]||'').toString().trim();
+        if (!name || /^total|^grand total|^subtotal/i.test(name)) continue;
+        const code = codeCol ? (row[codeCol]||'').toString().trim() : '';
+        accounts.push({
+          code, name,
+          type: inferType(code, name),
+          unadj_dr: guessedDr ? Math.abs(cleanNum(row[guessedDr])) : 0,
+          unadj_cr: guessedCr ? Math.abs(cleanNum(row[guessedCr])) : 0,
+        });
+      }
+    }
+    accounts = accounts.filter(a => a.name && (a.unadj_dr!==0||a.unadj_cr!==0||a.code));
+    return { accounts, format, colMap:{ codeCol, nameCol, drCol, crCol, balCol, dateCol } };
+  };
+
+  const parseCSV = (file) => new Promise((resolve, reject) => {
+    Papa.parse(file, {
+      header: true, skipEmptyLines: 'greedy',
+      complete: ({data}) => resolve(data),
+      error: (err) => reject(err),
     });
+  });
+
+  const parseExcel = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+        for (const sheetName of wb.SheetNames) {
+          const ws = wb.Sheets[sheetName];
+          const data = XLSX.utils.sheet_to_json(ws, {defval:'', raw:false});
+          if (data.length > 0) { resolve(data); return; }
+        }
+        resolve([]);
+      } catch(err) { reject(err); }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+
+  const processFile = async (file) => {
+    setStatus('Reading file…');
+    setPreview([]);
+    setParseInfo(null);
+    try {
+      const ext = file.name.split('.').pop().toLowerCase();
+      let rawRows = [];
+      if (['xlsx','xls','ods','xlsm','xlsb'].includes(ext)) {
+        rawRows = await parseExcel(file);
+      } else {
+        rawRows = await parseCSV(file);
+      }
+      if (!rawRows.length) { setStatus('No data rows found in file.'); return; }
+      const result = detectAndMap(rawRows);
+      setParseInfo(result);
+      setPreview(result.accounts);
+      setStatus('');
+    } catch (err) {
+      setStatus('Parse error: ' + err.message);
+      toast('Could not read file: ' + err.message, 'error');
+    }
   };
 
   const onDrop = (e) => {
@@ -869,8 +1050,13 @@ function UploadGLModal({ engId, onClose, onImported }) {
 
   const importAll = async () => {
     setLoading(true);
-    const rows = preview.map((r,i) => ({ ...r, engagement_id: engId, sort_order: i, type: ['ASSET','LIABILITY','EQUITY','INCOME','COGS','EXPENSE','OTHER'].includes(r.type) ? r.type : 'ASSET' }));
-    // Clear existing first
+    const VALID_TYPES = ['ASSET','LIABILITY','EQUITY','INCOME','COGS','EXPENSE','OTHER'];
+    const rows = preview.map((r,i) => ({
+      ...r,
+      engagement_id: engId,
+      sort_order: i,
+      type: VALID_TYPES.includes(r.type) ? r.type : 'ASSET',
+    }));
     await sb.from('accounts').delete().eq('engagement_id', engId);
     const { error } = await sb.from('accounts').insert(rows);
     if (error) { toast(error.message,'error'); setLoading(false); return; }
@@ -878,33 +1064,69 @@ function UploadGLModal({ engId, onClose, onImported }) {
     onImported();
   };
 
+  const thS = {padding:'4px 8px',background:'#f0efe9',textAlign:'left'};
+  const tdS = {padding:'3px 8px',fontSize:11};
+
   return (
     <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div className="modal" style={{maxWidth:600}}>
-        <div className="modal-header"><h3>Import GL / Trial Balance</h3><button className="btn btn-ghost btn-icon" onClick={onClose}><Ic.X/></button></div>
+      <div className="modal" style={{maxWidth:680}}>
+        <div className="modal-header">
+          <h3>Import GL / Trial Balance</h3>
+          <button className="btn btn-ghost btn-icon" onClick={onClose}><Ic.X/></button>
+        </div>
         <div className="modal-body">
-          <p style={{fontSize:12,color:'var(--muted)',marginBottom:12}}>
-            Upload a CSV with columns: Code, Name, Type (ASSET/LIABILITY/EQUITY/INCOME/COGS/EXPENSE/OTHER), DR, CR
+          <p style={{fontSize:12,color:'var(--muted)',marginBottom:10}}>
+            Accepts <strong>CSV, Excel (xlsx/xls)</strong>, or any delimited text — Trial Balance <em>or</em> detailed General Ledger.
+            Columns are auto-detected. Account types are inferred from account codes and names.
           </p>
           <div
-            style={{border:`2px dashed ${dragging?'var(--amber)':'var(--border)'}`,borderRadius:8,padding:32,textAlign:'center',cursor:'pointer',transition:'all .15s'}}
+            style={{border:`2px dashed ${dragging?'var(--amber)':'var(--border)'}`,borderRadius:8,padding:28,textAlign:'center',cursor:'pointer',transition:'all .15s',background:dragging?'rgba(181,113,58,.05)':'transparent'}}
             onDragOver={e=>{e.preventDefault();setDragging(true)}}
             onDragLeave={()=>setDragging(false)}
             onDrop={onDrop}
             onClick={()=>inputRef.current.click()}
           >
-            <input ref={inputRef} type="file" accept=".csv" style={{display:'none'}} onChange={e=>processFile(e.target.files[0])}/>
-            <Ic.Upload/> <span style={{marginLeft:6,fontSize:13}}>Drop CSV here or click to browse</span>
+            <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls,.ods,.xlsm,.tsv,.txt" style={{display:'none'}} onChange={e=>processFile(e.target.files[0])}/>
+            <div style={{fontSize:28,marginBottom:6}}>📂</div>
+            <div style={{fontSize:13,fontWeight:600}}>Drop file here or click to browse</div>
+            <div style={{fontSize:11,color:'var(--muted)',marginTop:4}}>CSV · Excel · TSV · any delimited format</div>
           </div>
+
+          {status && <div style={{marginTop:10,fontSize:12,color:'var(--muted)'}}>{status}</div>}
+
+          {parseInfo && (
+            <div style={{marginTop:10,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+              <span className="tag tag-blue" style={{fontSize:11}}>Format: {parseInfo.format}</span>
+              <span className="tag" style={{fontSize:11,background:'#e8ede4',color:'#2a4a1f'}}>{preview.length} accounts detected</span>
+              {parseInfo.colMap && parseInfo.colMap.dateCol && <span className="tag" style={{fontSize:11,background:'#fef3e2',color:'#7a5c1e'}}>Aggregated from GL transactions</span>}
+            </div>
+          )}
+
           {preview.length > 0 && (
-            <div style={{marginTop:12}}>
-              <div style={{fontSize:12,color:'var(--muted)',marginBottom:6}}>Preview ({preview.length} accounts):</div>
-              <div style={{maxHeight:200,overflowY:'auto',border:'1px solid var(--border)',borderRadius:4}}>
-                <table style={{width:'100%',fontSize:12}}>
-                  <thead><tr><th style={{padding:'4px 8px',background:'#f0efe9'}}>Code</th><th style={{padding:'4px 8px',background:'#f0efe9'}}>Name</th><th style={{padding:'4px 8px',background:'#f0efe9'}}>Type</th><th style={{padding:'4px 8px',background:'#f0efe9',textAlign:'right'}}>DR</th><th style={{padding:'4px 8px',background:'#f0efe9',textAlign:'right'}}>CR</th></tr></thead>
-                  <tbody>{preview.slice(0,10).map((r,i)=><tr key={i}><td style={{padding:'3px 8px'}}>{r.code}</td><td style={{padding:'3px 8px'}}>{r.name}</td><td style={{padding:'3px 8px'}}>{r.type}</td><td style={{padding:'3px 8px',textAlign:'right'}}>{r.unadj_dr||''}</td><td style={{padding:'3px 8px',textAlign:'right'}}>{r.unadj_cr||''}</td></tr>)}</tbody>
+            <div style={{marginTop:10}}>
+              <div style={{fontSize:11,color:'var(--muted)',marginBottom:5}}>Preview (first 15 of {preview.length}):</div>
+              <div style={{maxHeight:220,overflowY:'auto',border:'1px solid var(--border)',borderRadius:4}}>
+                <table style={{width:'100%',fontSize:12,borderCollapse:'collapse'}}>
+                  <thead>
+                    <tr style={{borderBottom:'1px solid var(--border)'}}>
+                      <th style={thS}>Code</th><th style={thS}>Account Name</th><th style={thS}>Type</th>
+                      <th style={{...thS,textAlign:'right'}}>DR Balance</th>
+                      <th style={{...thS,textAlign:'right'}}>CR Balance</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.slice(0,15).map((r,i)=>(
+                      <tr key={i} style={{borderBottom:'1px solid #f0efe9'}}>
+                        <td style={tdS}>{r.code}</td>
+                        <td style={tdS}>{r.name}</td>
+                        <td style={tdS}><span className={`tag tag-${r.type==='ASSET'?'blue':r.type==='LIABILITY'?'red':r.type==='EQUITY'?'green':r.type==='INCOME'?'green':r.type==='EXPENSE'?'amber':''}`} style={{fontSize:10}}>{r.type}</span></td>
+                        <td style={{...tdS,textAlign:'right'}}>{r.unadj_dr?r.unadj_dr.toLocaleString(undefined,{minimumFractionDigits:2}):''}</td>
+                        <td style={{...tdS,textAlign:'right'}}>{r.unadj_cr?r.unadj_cr.toLocaleString(undefined,{minimumFractionDigits:2}):''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
                 </table>
-                {preview.length>10&&<div style={{padding:'4px 8px',fontSize:11,color:'var(--muted)'}}>…and {preview.length-10} more</div>}
+                {preview.length>15&&<div style={{padding:'4px 8px',fontSize:11,color:'var(--muted)'}}>…and {preview.length-15} more accounts</div>}
               </div>
             </div>
           )}
@@ -912,7 +1134,7 @@ function UploadGLModal({ engId, onClose, onImported }) {
         <div className="modal-footer">
           <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
           <button className="btn btn-primary" onClick={importAll} disabled={loading||preview.length===0}>
-            {loading?<span className="spinner"/>:`Import ${preview.length} Accounts`}
+            {loading?<span className="spinner"/>:<><Ic.Upload/> Import {preview.length} Accounts</>}
           </button>
         </div>
       </div>
