@@ -1,0 +1,1574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ledgerline — Cloud</title>
+
+<!-- Supabase JS v2 -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<!-- React 18 + Babel -->
+<script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<!-- SheetJS for Excel export -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+<!-- PapaParse for CSV upload -->
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+<style>
+  /* ── Reset & Base ───────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --green:  #1D2E1D;
+    --green2: #2A4A2A;
+    --cream:  #F5F4EF;
+    --amber:  #B5713A;
+    --amber2: #9A5E2E;
+    --border: #D8D6CF;
+    --text:   #1A1A1A;
+    --muted:  #6B6B5E;
+    --danger: #C0392B;
+    --success:#27AE60;
+    --card:   #FFFFFF;
+    --shadow: 0 1px 3px rgba(0,0,0,.10), 0 1px 2px rgba(0,0,0,.06);
+    --radius: 6px;
+  }
+  html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; color: var(--text); background: var(--cream); }
+  #root { height: 100%; display: flex; flex-direction: column; }
+
+  /* ── Utility ────────────────────────────────────────────────── */
+  .btn { display:inline-flex; align-items:center; gap:6px; padding:7px 14px; border-radius:var(--radius); font-size:13px; font-weight:500; cursor:pointer; border:1px solid transparent; transition: all .15s; }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  .btn-primary { background:var(--amber); color:#fff; border-color:var(--amber); }
+  .btn-primary:hover:not(:disabled) { background:var(--amber2); }
+  .btn-secondary { background:#fff; color:var(--text); border-color:var(--border); }
+  .btn-secondary:hover:not(:disabled) { background:#f0efe9; }
+  .btn-danger { background:var(--danger); color:#fff; border-color:var(--danger); }
+  .btn-ghost { background:transparent; color:var(--muted); border-color:transparent; }
+  .btn-ghost:hover { background:rgba(0,0,0,.05); }
+  .btn-sm { padding:4px 10px; font-size:12px; }
+  .btn-icon { padding:6px; min-width:32px; justify-content:center; }
+
+  input, select, textarea {
+    width:100%; padding:7px 10px; border:1px solid var(--border); border-radius:var(--radius);
+    font-size:13px; background:#fff; color:var(--text); outline:none;
+    transition: border-color .15s;
+  }
+  input:focus, select:focus, textarea:focus { border-color:var(--amber); }
+  label { display:block; font-size:12px; font-weight:600; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:.5px; }
+
+  .card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); }
+  .tag { display:inline-block; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:600; }
+  .tag-green  { background:#D5E8D5; color:#1a5c1a; }
+  .tag-blue   { background:#D0E8F5; color:#1a4a70; }
+  .tag-orange { background:#FDEBD0; color:#7a4010; }
+  .tag-red    { background:#FADBD8; color:#7a1a1a; }
+
+  .toast { position:fixed; bottom:24px; right:24px; z-index:9999; display:flex; flex-direction:column; gap:8px; }
+  .toast-item { padding:12px 16px; border-radius:var(--radius); color:#fff; font-size:13px; box-shadow:var(--shadow); animation: fadeIn .2s; }
+  .toast-item.success { background:var(--success); }
+  .toast-item.error   { background:var(--danger); }
+  .toast-item.info    { background:var(--green); }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+
+  .modal-overlay { position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px; }
+  .modal { background:#fff;border-radius:8px;width:100%;max-width:520px;box-shadow:0 20px 40px rgba(0,0,0,.2);max-height:90vh;overflow-y:auto; }
+  .modal-header { display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border); }
+  .modal-header h3 { font-size:15px;font-weight:700; }
+  .modal-body { padding:20px; }
+  .modal-footer { padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end; }
+  .form-row { margin-bottom:14px; }
+  .form-grid-2 { display:grid;grid-template-columns:1fr 1fr;gap:12px; }
+
+  /* ── Header ─────────────────────────────────────────────────── */
+  .app-header { background:var(--green); color:#fff; padding:0 20px; height:52px; display:flex; align-items:center; gap:16px; flex-shrink:0; }
+  .app-logo   { font-size:17px; font-weight:700; letter-spacing:-.3px; color:#fff; text-decoration:none; }
+  .app-logo span { color:var(--amber); }
+  .header-spacer { flex:1; }
+  .user-chip { display:flex;align-items:center;gap:8px;font-size:12px;color:rgba(255,255,255,.8); }
+  .avatar { width:28px;height:28px;border-radius:50%;background:var(--amber);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700; }
+
+  /* ── Sidebar + layout ───────────────────────────────────────── */
+  .app-body  { flex:1;display:flex;overflow:hidden; }
+  .sidebar   { width:210px;background:var(--green2);flex-shrink:0;display:flex;flex-direction:column;padding:12px 0;overflow-y:auto; }
+  .sidebar-section { padding:6px 14px 4px;font-size:10px;font-weight:700;color:rgba(255,255,255,.4);letter-spacing:1px;text-transform:uppercase;margin-top:8px; }
+  .sidebar-item { display:flex;align-items:center;gap:9px;padding:8px 16px;font-size:13px;color:rgba(255,255,255,.75);cursor:pointer;border-left:2px solid transparent;transition:all .12s; }
+  .sidebar-item:hover { background:rgba(255,255,255,.07);color:#fff; }
+  .sidebar-item.active { background:rgba(255,255,255,.1);color:#fff;border-left-color:var(--amber); }
+  .sidebar-item svg { opacity:.7;flex-shrink:0; }
+  .content-area { flex:1;overflow-y:auto;padding:20px; }
+
+  /* ── Table ───────────────────────────────────────────────────── */
+  .table-wrap { overflow-x:auto;border-radius:var(--radius);border:1px solid var(--border); }
+  table { width:100%;border-collapse:collapse; }
+  th { background:#f0efe9;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;padding:8px 12px;text-align:left;border-bottom:1px solid var(--border); }
+  td { padding:8px 12px;border-bottom:1px solid #ece9e0;font-size:13px; }
+  tr:last-child td { border-bottom:none; }
+  tr:hover td { background:#fafaf7; }
+  .num { text-align:right;font-variant-numeric:tabular-nums;font-family:monospace; }
+
+  /* ── Auth page ───────────────────────────────────────────────── */
+  .auth-page { min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--green);padding:20px; }
+  .auth-card { background:#fff;border-radius:10px;padding:40px;width:100%;max-width:380px;box-shadow:0 20px 50px rgba(0,0,0,.3); }
+  .auth-logo  { font-size:24px;font-weight:800;color:var(--green);margin-bottom:4px; }
+  .auth-logo span { color:var(--amber); }
+  .auth-sub   { font-size:13px;color:var(--muted);margin-bottom:28px; }
+
+  /* ── Spinner ─────────────────────────────────────────────────── */
+  .spinner { display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite; }
+  .spinner.dark { border-color:rgba(0,0,0,.15);border-top-color:var(--amber); }
+  @keyframes spin { to{transform:rotate(360deg)} }
+
+  /* ── Misc ────────────────────────────────────────────────────── */
+  .page-title { font-size:20px;font-weight:700;margin-bottom:4px; }
+  .page-sub   { font-size:13px;color:var(--muted);margin-bottom:20px; }
+  .empty      { text-align:center;padding:48px 24px;color:var(--muted); }
+  .empty svg  { margin-bottom:12px;opacity:.3; }
+  .divider    { height:1px;background:var(--border);margin:16px 0; }
+  .flex-between { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px; }
+  .flex-gap   { display:flex;align-items:center;gap:8px; }
+  .tabs       { display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:20px; }
+  .tab        { padding:8px 16px;font-size:13px;font-weight:500;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .12s; }
+  .tab.active { color:var(--amber);border-bottom-color:var(--amber); }
+  .tab:hover  { color:var(--text); }
+  .badge      { display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;font-size:10px;font-weight:700;background:var(--amber);color:#fff; }
+  .kpi-grid   { display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px; }
+  .kpi-card   { background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:14px; }
+  .kpi-label  { font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px; }
+  .kpi-value  { font-size:22px;font-weight:700;font-variant-numeric:tabular-nums; }
+  .kpi-value.pos { color:var(--success); }
+  .kpi-value.neg { color:var(--danger); }
+  .inline-err { font-size:12px;color:var(--danger);margin-top:4px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+// ═══════════════════════════════════════════════════════════════
+// CONFIG  —  replace these before deploying
+// ═══════════════════════════════════════════════════════════════
+const SUPABASE_URL = window.__SUPABASE_URL__ || 'https://gvleqndrorfzeabehgmg.supabase.co';
+const SUPABASE_ANON_KEY = window.__SUPABASE_ANON_KEY__ || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd2bGVxbmRyb3JmemVhYmVoZ21nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4NTQ5NDAsImV4cCI6MjA5NjQzMDk0MH0.pGSrX8dnxf_TqJ3MetueZ1t3PngMCcqyQxT59vIovPs';
+const API_BASE = window.__API_BASE__ || 'https://ledgerline-api.onrender.com';  // Python FastAPI on Render
+
+const { createClient } = supabase;
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const { useState, useEffect, useCallback, useRef, createContext, useContext } = React;
+
+// ───── Context ───────────────────────────────────────────────
+const AppCtx = createContext(null);
+const useApp = () => useContext(AppCtx);
+
+// ───── Helpers ───────────────────────────────────────────────
+const fmt = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-US') : '';
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Drake tax line codes — same as Phase 1 app
+const DRAKE_LINES = {
+  'S-Corp': {
+    lines: [
+      { code:'1a',  label:'Gross receipts or sales' },
+      { code:'1b',  label:'Returns and allowances' },
+      { code:'2',   label:'Cost of goods sold' },
+      { code:'7',   label:'Compensation of officers' },
+      { code:'8',   label:'Salaries and wages' },
+      { code:'9',   label:'Repairs and maintenance' },
+      { code:'10',  label:'Bad debts' },
+      { code:'11',  label:'Rents' },
+      { code:'12',  label:'Taxes and licenses' },
+      { code:'13',  label:'Interest' },
+      { code:'14',  label:'Depreciation' },
+      { code:'15',  label:'Depletion' },
+      { code:'16',  label:'Advertising' },
+      { code:'17',  label:'Pension/profit-sharing plans' },
+      { code:'18',  label:'Employee benefit programs' },
+      { code:'19',  label:'Other deductions' },
+      { code:'B1',  label:'Beginning inventory' },
+      { code:'B7',  label:'Cost of labor' },
+      { code:'B8',  label:'Other costs' },
+      { code:'B9',  label:'Ending inventory' },
+      { code:'L1',  label:'Cash' },
+      { code:'L2',  label:'Trade notes & accounts receivable' },
+      { code:'L4',  label:'Inventories' },
+      { code:'L6',  label:'Other current assets' },
+      { code:'L7',  label:'Loans to shareholders' },
+      { code:'L9',  label:'Buildings & other depreciable assets' },
+      { code:'L11', label:'Depletable assets' },
+      { code:'L13', label:'Land' },
+      { code:'L14', label:'Intangible assets' },
+      { code:'L16', label:'Other assets' },
+      { code:'L18', label:'Accounts payable' },
+      { code:'L19', label:'Mortgages, notes payable (short)' },
+      { code:'L20', label:'Other current liabilities' },
+      { code:'L21', label:'Loans from shareholders' },
+      { code:'L23', label:'Mortgages, notes payable (long)' },
+      { code:'L24', label:'Other liabilities' },
+      { code:'L25', label:'Capital stock' },
+      { code:'L26', label:'Additional paid-in capital' },
+      { code:'L27', label:'Retained earnings' },
+      { code:'L28', label:'Adjustments to shareholder equity' },
+      { code:'L29', label:'Less cost of treasury stock' },
+    ]
+  },
+  'Partnership': {
+    lines: [
+      { code:'1a',  label:'Gross receipts or sales' },
+      { code:'2',   label:'Cost of goods sold' },
+      { code:'5',   label:'Interest income' },
+      { code:'6a',  label:'Dividends' },
+      { code:'7',   label:'Royalties' },
+      { code:'9',   label:'Net gain/loss (Form 4797)' },
+      { code:'10',  label:'Other income (loss)' },
+      { code:'13',  label:'Salaries and wages' },
+      { code:'14',  label:'Guaranteed payments – services' },
+      { code:'15',  label:'Guaranteed payments – capital' },
+      { code:'16',  label:'Repairs and maintenance' },
+      { code:'17',  label:'Bad debts' },
+      { code:'18',  label:'Rent' },
+      { code:'19',  label:'Taxes and licenses' },
+      { code:'20',  label:'Interest expense' },
+      { code:'21',  label:'Depreciation' },
+      { code:'22',  label:'Depletion' },
+      { code:'23',  label:'Retirement plans' },
+      { code:'24',  label:'Employee benefit programs' },
+      { code:'25',  label:'Other deductions' },
+      { code:'L1',  label:'Cash' },
+      { code:'L2',  label:'Accounts receivable' },
+      { code:'L4',  label:'Inventories' },
+      { code:'L6',  label:'Other current assets' },
+      { code:'L7',  label:'Mortgage & real estate loans' },
+      { code:'L9',  label:'Buildings & depreciable assets' },
+      { code:'L11', label:'Depletable assets' },
+      { code:'L12', label:'Land' },
+      { code:'L13', label:'Intangible assets' },
+      { code:'L15', label:'Other assets' },
+      { code:'L16', label:'Accounts payable' },
+      { code:'L17', label:'Mortgages, notes payable (short)' },
+      { code:'L18', label:'Other current liabilities' },
+      { code:'L19', label:'All nonrecourse loans' },
+      { code:'L20', label:'Mortgages, notes payable (long)' },
+      { code:'L21', label:'Other liabilities' },
+      { code:'L22', label:'Partners capital' },
+    ]
+  },
+  'C-Corp': {
+    lines: [
+      { code:'1a',  label:'Gross receipts or sales' },
+      { code:'1b',  label:'Returns and allowances' },
+      { code:'2',   label:'Cost of goods sold' },
+      { code:'4',   label:'Dividends' },
+      { code:'5',   label:'Interest' },
+      { code:'6',   label:'Gross rents' },
+      { code:'7',   label:'Gross royalties' },
+      { code:'8',   label:'Capital gain net income' },
+      { code:'9',   label:'Net gain/loss (Form 4797)' },
+      { code:'10',  label:'Other income' },
+      { code:'12',  label:'Compensation of officers' },
+      { code:'13',  label:'Salaries and wages' },
+      { code:'14',  label:'Repairs and maintenance' },
+      { code:'15',  label:'Bad debts' },
+      { code:'16',  label:'Rents' },
+      { code:'17',  label:'Taxes and licenses' },
+      { code:'18',  label:'Interest expense' },
+      { code:'19',  label:'Charitable contributions' },
+      { code:'20',  label:'Depreciation' },
+      { code:'21',  label:'Depletion' },
+      { code:'22',  label:'Advertising' },
+      { code:'23',  label:'Pension/profit-sharing plans' },
+      { code:'24',  label:'Employee benefit programs' },
+      { code:'26',  label:'Other deductions' },
+      { code:'L1',  label:'Cash' },
+      { code:'L2',  label:'Trade notes & accounts receivable' },
+      { code:'L4',  label:'Inventories' },
+      { code:'L6',  label:'U.S. government obligations' },
+      { code:'L7',  label:'Tax-exempt securities' },
+      { code:'L8',  label:'Other current assets' },
+      { code:'L9',  label:'Loans to shareholders' },
+      { code:'L10', label:'Mortgage & real estate loans' },
+      { code:'L12', label:'Buildings & other depreciable assets' },
+      { code:'L14', label:'Depletable assets' },
+      { code:'L15', label:'Land' },
+      { code:'L16', label:'Intangible assets' },
+      { code:'L18', label:'Other assets' },
+      { code:'L20', label:'Accounts payable' },
+      { code:'L21', label:'Mortgages, notes, bonds payable (short)' },
+      { code:'L22', label:'Other current liabilities' },
+      { code:'L23', label:'Loans from shareholders' },
+      { code:'L24', label:'Mortgages, notes, bonds payable (long)' },
+      { code:'L25', label:'Other liabilities' },
+      { code:'L26', label:'Capital stock (preferred)' },
+      { code:'L27', label:'Capital stock (common)' },
+      { code:'L28', label:'Additional paid-in capital' },
+      { code:'L29', label:'Retained earnings (appropriated)' },
+      { code:'L30', label:'Retained earnings (unappropriated)' },
+      { code:'L31', label:'Adjustments to shareholders equity' },
+      { code:'L32', label:'Less cost of treasury stock' },
+    ]
+  }
+};
+
+// ───── Toast ─────────────────────────────────────────────────
+function ToastContainer() {
+  const { toasts } = useApp();
+  return (
+    <div className="toast">
+      {toasts.map(t => (
+        <div key={t.id} className={`toast-item ${t.type}`}>{t.msg}</div>
+      ))}
+    </div>
+  );
+}
+
+// ───── Icons ─────────────────────────────────────────────────
+const Ic = {
+  X: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>,
+  Plus: () => <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>,
+  Logout: () => <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>,
+  Users: () => <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+  File: () => <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>,
+  Home: () => <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>,
+  ChevR: () => <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><polyline points="9,18 15,12 9,6"/></svg>,
+  Down: () => <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>,
+  Upload: () => <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>,
+  Refresh: () => <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>,
+  Shield: () => <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>,
+};
+
+// ═══════════════════════════════════════════════════════════════
+// AUTH PAGES
+// ═══════════════════════════════════════════════════════════════
+function AuthPage({ mode, onSwitch, onSuccess }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+  const [info, setInfo] = useState('');
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr(''); setInfo(''); setLoading(true);
+    try {
+      if (mode === 'login') {
+        const { data, error } = await sb.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        onSuccess(data.session);
+      } else if (mode === 'register') {
+        const { data, error } = await sb.auth.signUp({
+          email, password,
+          options: { data: { full_name: name } }
+        });
+        if (error) throw error;
+        setInfo('Check your email to confirm your account, then sign in.');
+      } else {
+        const { error } = await sb.auth.resetPasswordForEmail(email, {
+          redirectTo: window.location.origin
+        });
+        if (error) throw error;
+        setInfo('Password reset email sent. Check your inbox.');
+      }
+    } catch(e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="auth-page">
+      <div className="auth-card">
+        <div className="auth-logo">Ledger<span>line</span></div>
+        <div className="auth-sub">
+          {mode === 'login' && 'Sign in to your CPA workspace'}
+          {mode === 'register' && 'Create an account'}
+          {mode === 'reset' && 'Reset your password'}
+        </div>
+        <form onSubmit={submit}>
+          {mode === 'register' && (
+            <div className="form-row">
+              <label>Full Name</label>
+              <input value={name} onChange={e=>setName(e.target.value)} placeholder="Jane Smith, CPA" required />
+            </div>
+          )}
+          <div className="form-row">
+            <label>Email</label>
+            <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@firm.com" required />
+          </div>
+          {mode !== 'reset' && (
+            <div className="form-row">
+              <label>Password</label>
+              <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••" required minLength="6" />
+            </div>
+          )}
+          {err  && <div className="inline-err" style={{marginBottom:12}}>{err}</div>}
+          {info && <div style={{fontSize:13,color:'var(--success)',marginBottom:12}}>{info}</div>}
+          <button className="btn btn-primary" style={{width:'100%',justifyContent:'center',marginBottom:12}} disabled={loading}>
+            {loading ? <span className="spinner"/> :
+              mode === 'login' ? 'Sign In' : mode === 'register' ? 'Create Account' : 'Send Reset Email'}
+          </button>
+        </form>
+        <div style={{fontSize:12,color:'var(--muted)',textAlign:'center',lineHeight:1.8}}>
+          {mode === 'login' && <>
+            <span style={{cursor:'pointer',color:'var(--amber)'}} onClick={()=>onSwitch('register')}>Create account</span>
+            {' · '}
+            <span style={{cursor:'pointer',color:'var(--amber)'}} onClick={()=>onSwitch('reset')}>Forgot password?</span>
+          </>}
+          {mode !== 'login' && <span style={{cursor:'pointer',color:'var(--amber)'}} onClick={()=>onSwitch('login')}>Back to sign in</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MAIN APP SHELL
+// ═══════════════════════════════════════════════════════════════
+function AppShell({ session }) {
+  const [profile, setProfile] = useState(null);
+  const [page, setPage] = useState('engagements');
+  const [engagementId, setEngagementId] = useState(null);
+  const [engTab, setEngTab] = useState('tb');
+  const [toasts, setToasts] = useState([]);
+  const toastId = useRef(0);
+
+  const toast = useCallback((msg, type='info') => {
+    const id = ++toastId.current;
+    setToasts(t => [...t, {id, msg, type}]);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 4000);
+  }, []);
+
+  useEffect(() => {
+    sb.from('profiles').select('*').eq('id', session.user.id).single()
+      .then(({ data }) => setProfile(data));
+  }, [session]);
+
+  const logout = async () => {
+    await sb.auth.signOut();
+  };
+
+  const openEngagement = (id) => { setEngagementId(id); setPage('engagement'); setEngTab('tb'); };
+  const backToList = () => { setPage('engagements'); setEngagementId(null); };
+
+  const isAdmin = profile?.role === 'admin';
+  const isStaff = profile?.role === 'staff' || isAdmin;
+
+  return (
+    <AppCtx.Provider value={{ session, profile, toast, isAdmin, isStaff }}>
+      <div style={{display:'flex',flexDirection:'column',height:'100vh'}}>
+        <header className="app-header">
+          <span className="app-logo" style={{cursor:'pointer'}} onClick={backToList}>Ledger<span>line</span></span>
+          <div className="header-spacer"/>
+          <div className="user-chip">
+            <div className="avatar">{(profile?.full_name || profile?.email || 'U')[0].toUpperCase()}</div>
+            <span>{profile?.full_name || profile?.email}</span>
+            <span className="tag tag-blue" style={{fontSize:10}}>{profile?.role}</span>
+            <button className="btn btn-ghost btn-sm btn-icon" onClick={logout} title="Sign out">
+              <Ic.Logout/>
+            </button>
+          </div>
+        </header>
+
+        <div className="app-body">
+          <nav className="sidebar">
+            <div className="sidebar-section">Workspace</div>
+            <div className={`sidebar-item ${page==='engagements'?'active':''}`} onClick={backToList}>
+              <Ic.Home/> Engagements
+            </div>
+            {isAdmin && <>
+              <div className="sidebar-section">Admin</div>
+              <div className={`sidebar-item ${page==='users'?'active':''}`} onClick={()=>setPage('users')}>
+                <Ic.Users/> User Management
+              </div>
+              <div className={`sidebar-item ${page==='audit'?'active':''}`} onClick={()=>setPage('audit')}>
+                <Ic.Shield/> Audit Log
+              </div>
+            </>}
+          </nav>
+
+          <main className="content-area">
+            {page === 'engagements' && <EngagementsPage onOpen={openEngagement}/>}
+            {page === 'engagement' && engagementId && (
+              <EngagementPage id={engagementId} onBack={backToList} tab={engTab} setTab={setEngTab}/>
+            )}
+            {page === 'users' && isAdmin && <UsersPage/>}
+            {page === 'audit' && isAdmin && <AuditPage/>}
+          </main>
+        </div>
+
+        <ToastContainer/>
+      </div>
+    </AppCtx.Provider>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ENGAGEMENTS LIST PAGE
+// ═══════════════════════════════════════════════════════════════
+function EngagementsPage({ onOpen }) {
+  const { toast, isStaff } = useApp();
+  const [engagements, setEngagements] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showNew, setShowNew] = useState(false);
+  const [search, setSearch] = useState('');
+
+  const load = async () => {
+    setLoading(true);
+    const { data, error } = await sb.from('engagements').select('*').order('created_at', { ascending: false });
+    if (!error) setEngagements(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const filtered = engagements.filter(e =>
+    e.client_name.toLowerCase().includes(search.toLowerCase()) ||
+    e.fiscal_year.includes(search) ||
+    e.entity_type.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const tagFor = (t) => {
+    if (t === 'S-Corp') return 'tag-green';
+    if (t === 'Partnership') return 'tag-blue';
+    return 'tag-orange';
+  };
+
+  return (
+    <div>
+      <div className="flex-between">
+        <div>
+          <div className="page-title">Engagements</div>
+          <div className="page-sub">{engagements.length} total</div>
+        </div>
+        <div className="flex-gap">
+          <input style={{width:200}} placeholder="Search…" value={search} onChange={e=>setSearch(e.target.value)}/>
+          {isStaff && <button className="btn btn-primary" onClick={()=>setShowNew(true)}><Ic.Plus/> New</button>}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="empty"><span className="spinner dark"/></div>
+      ) : filtered.length === 0 ? (
+        <div className="empty">
+          <svg width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1" viewBox="0 0 24 24">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/>
+          </svg>
+          <div>{search ? 'No matching engagements' : 'No engagements yet'}</div>
+          {isStaff && !search && <button className="btn btn-primary" style={{marginTop:12}} onClick={()=>setShowNew(true)}>Create first engagement</button>}
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Client</th><th>Entity</th><th>Year</th><th>Created</th><th></th></tr>
+            </thead>
+            <tbody>
+              {filtered.map(e => (
+                <tr key={e.id} style={{cursor:'pointer'}} onClick={()=>onOpen(e.id)}>
+                  <td><strong>{e.client_name}</strong></td>
+                  <td><span className={`tag ${tagFor(e.entity_type)}`}>{e.entity_type}</span></td>
+                  <td>{e.fiscal_year}</td>
+                  <td>{fmtDate(e.created_at)}</td>
+                  <td><Ic.ChevR/></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {showNew && <NewEngModal onClose={()=>setShowNew(false)} onCreated={(id)=>{load();onOpen(id);}} />}
+    </div>
+  );
+}
+
+function NewEngModal({ onClose, onCreated }) {
+  const { toast } = useApp();
+  const [form, setForm] = useState({ client_name:'', fiscal_year: new Date().getFullYear().toString(), entity_type:'S-Corp' });
+  const [loading, setLoading] = useState(false);
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  const submit = async () => {
+    if (!form.client_name.trim()) return;
+    setLoading(true);
+    const { data, error } = await sb.from('engagements').insert(form).select().single();
+    if (error) { toast(error.message,'error'); setLoading(false); return; }
+    toast('Engagement created','success');
+    onCreated(data.id);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal">
+        <div className="modal-header">
+          <h3>New Engagement</h3>
+          <button className="btn btn-ghost btn-icon" onClick={onClose}><Ic.X/></button>
+        </div>
+        <div className="modal-body">
+          <div className="form-row"><label>Client Name</label>
+            <input value={form.client_name} onChange={e=>set('client_name',e.target.value)} placeholder="Acme Corp" autoFocus/>
+          </div>
+          <div className="form-grid-2">
+            <div className="form-row"><label>Fiscal Year</label>
+              <input value={form.fiscal_year} onChange={e=>set('fiscal_year',e.target.value)} placeholder="2024"/>
+            </div>
+            <div className="form-row"><label>Entity Type</label>
+              <select value={form.entity_type} onChange={e=>set('entity_type',e.target.value)}>
+                <option>S-Corp</option><option>Partnership</option><option>C-Corp</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={submit} disabled={loading || !form.client_name.trim()}>
+            {loading ? <span className="spinner"/> : 'Create'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ENGAGEMENT DETAIL PAGE
+// ═══════════════════════════════════════════════════════════════
+function EngagementPage({ id, onBack, tab, setTab }) {
+  const { toast, isStaff } = useApp();
+  const [eng, setEng] = useState(null);
+  const [accounts, setAccounts] = useState([]);
+  const [ajeHeaders, setAjeHeaders] = useState([]);
+  const [ajeLines, setAjeLines] = useState([]);
+  const [mappings, setMappings] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const reload = useCallback(async () => {
+    const [engR, accR, ajeHR, ajeLR, mapR] = await Promise.all([
+      sb.from('engagements').select('*').eq('id',id).single(),
+      sb.from('accounts').select('*').eq('engagement_id',id).order('sort_order'),
+      sb.from('aje_headers').select('*').eq('engagement_id',id).order('date'),
+      sb.from('aje_lines').select('*').in('aje_header_id',
+        (await sb.from('aje_headers').select('id').eq('engagement_id',id)).data?.map(h=>h.id) || []
+      ),
+      sb.from('tax_mappings').select('*').eq('engagement_id',id),
+    ]);
+    setEng(engR.data);
+    setAccounts(accR.data||[]);
+    setAjeHeaders(ajeHR.data||[]);
+    setAjeLines(ajeLR.data||[]);
+    setMappings(mapR.data||[]);
+    setLoading(false);
+  }, [id]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  // Build adjustment map per account
+  const adjMap = {};
+  ajeHeaders.forEach(h => {
+    const lines = ajeLines.filter(l => l.aje_header_id === h.id);
+    lines.forEach(l => {
+      if (!adjMap[l.account_id]) adjMap[l.account_id] = { dr:0, cr:0 };
+      adjMap[l.account_id].dr += Number(l.dr||0);
+      adjMap[l.account_id].cr += Number(l.cr||0);
+    });
+  });
+
+  const getAdj = (acct) => adjMap[acct.id] || { dr:0, cr:0 };
+  const getAdjBal = (acct) => {
+    const adj = getAdj(acct);
+    const unadj = Number(acct.unadj_dr||0) - Number(acct.unadj_cr||0);
+    return unadj + adj.dr - adj.cr;
+  };
+
+  if (loading) return <div className="empty"><span className="spinner dark"/></div>;
+  if (!eng) return <div className="empty">Engagement not found.</div>;
+
+  return (
+    <div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+        <button className="btn btn-ghost btn-sm" onClick={onBack}>← Back</button>
+        <span style={{color:'var(--muted)'}}>|</span>
+        <strong>{eng.client_name}</strong>
+        <span className={`tag ${eng.entity_type==='S-Corp'?'tag-green':eng.entity_type==='Partnership'?'tag-blue':'tag-orange'}`}>{eng.entity_type}</span>
+        <span className="tag tag-blue">FY {eng.fiscal_year}</span>
+      </div>
+
+      <div className="tabs" style={{marginTop:12}}>
+        {[['tb','Trial Balance'],['aje','Adj. Entries'],['tax','Tax Mapping'],['reports','Reports']].map(([k,l])=>(
+          <div key={k} className={`tab ${tab===k?'active':''}`} onClick={()=>setTab(k)}>{l}</div>
+        ))}
+      </div>
+
+      {tab==='tb'      && <TrialBalanceTab eng={eng} accounts={accounts} adjMap={adjMap} reload={reload} getAdj={getAdj} getAdjBal={getAdjBal}/>}
+      {tab==='aje'     && <AdjEntriesTab eng={eng} accounts={accounts} headers={ajeHeaders} lines={ajeLines} reload={reload}/>}
+      {tab==='tax'     && <TaxMappingTab eng={eng} accounts={accounts} mappings={mappings} getAdjBal={getAdjBal} reload={reload}/>}
+      {tab==='reports' && <ReportsTab eng={eng} accounts={accounts} adjMap={adjMap} headers={ajeHeaders} mappings={mappings} getAdjBal={getAdjBal} reload={reload}/>}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TRIAL BALANCE TAB
+// ═══════════════════════════════════════════════════════════════
+function TrialBalanceTab({ eng, accounts, adjMap, reload, getAdj, getAdjBal }) {
+  const { toast, isStaff } = useApp();
+  const [showAdd, setShowAdd] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
+
+  // Totals
+  const totUnadjDr = accounts.reduce((s,a)=>s+Number(a.unadj_dr||0),0);
+  const totUnadjCr = accounts.reduce((s,a)=>s+Number(a.unadj_cr||0),0);
+  const totAdjDr   = accounts.reduce((s,a)=>s+getAdj(a).dr,0);
+  const totAdjCr   = accounts.reduce((s,a)=>s+getAdj(a).cr,0);
+  const totFinalDr = accounts.reduce((s,a)=>s+Math.max(0,getAdjBal(a)),0);
+  const totFinalCr = accounts.reduce((s,a)=>s+Math.abs(Math.min(0,getAdjBal(a))),0);
+
+  return (
+    <div>
+      <div className="flex-between">
+        <div className="kpi-grid" style={{flex:1}}>
+          <div className="kpi-card"><div className="kpi-label">Unadj DR</div><div className="kpi-value">{fmt(totUnadjDr)}</div></div>
+          <div className="kpi-card"><div className="kpi-label">Unadj CR</div><div className="kpi-value">{fmt(totUnadjCr)}</div></div>
+          <div className="kpi-card"><div className="kpi-label">Final DR</div><div className="kpi-value pos">{fmt(totFinalDr)}</div></div>
+          <div className="kpi-card"><div className="kpi-label">Final CR</div><div className="kpi-value neg">{fmt(totFinalCr)}</div></div>
+        </div>
+        {isStaff && <div className="flex-gap" style={{alignSelf:'flex-start'}}>
+          <button className="btn btn-secondary btn-sm" onClick={()=>setShowUpload(true)}><Ic.Upload/> Import GL</button>
+          <button className="btn btn-primary btn-sm" onClick={()=>setShowAdd(true)}><Ic.Plus/> Add Account</button>
+        </div>}
+      </div>
+
+      {accounts.length === 0 ? (
+        <div className="empty">No accounts yet. Import a GL or add manually.</div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Code</th><th>Account</th><th>Type</th>
+                <th className="num">Unadj DR</th><th className="num">Unadj CR</th>
+                <th className="num">Adj DR</th><th className="num">Adj CR</th>
+                <th className="num">Final DR</th><th className="num">Final CR</th>
+              </tr>
+            </thead>
+            <tbody>
+              {accounts.map(a => {
+                const adj = getAdj(a);
+                const bal = getAdjBal(a);
+                return (
+                  <tr key={a.id}>
+                    <td style={{color:'var(--muted)',fontFamily:'monospace'}}>{a.code}</td>
+                    <td>{a.name}</td>
+                    <td><span style={{fontSize:11,fontWeight:600,color:'var(--muted)'}}>{a.type}</span></td>
+                    <td className="num">{Number(a.unadj_dr)>0 ? fmt(a.unadj_dr) : ''}</td>
+                    <td className="num">{Number(a.unadj_cr)>0 ? fmt(a.unadj_cr) : ''}</td>
+                    <td className="num" style={{color:'var(--success)'}}>{adj.dr>0 ? fmt(adj.dr) : ''}</td>
+                    <td className="num" style={{color:'var(--danger)'}}>{adj.cr>0 ? fmt(adj.cr) : ''}</td>
+                    <td className="num">{bal>0 ? fmt(bal) : ''}</td>
+                    <td className="num">{bal<0 ? fmt(Math.abs(bal)) : ''}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr style={{background:'#f0efe9',fontWeight:700}}>
+                <td colSpan="3">Totals</td>
+                <td className="num">{fmt(totUnadjDr)}</td>
+                <td className="num">{fmt(totUnadjCr)}</td>
+                <td className="num">{fmt(totAdjDr)}</td>
+                <td className="num">{fmt(totAdjCr)}</td>
+                <td className="num">{fmt(totFinalDr)}</td>
+                <td className="num">{fmt(totFinalCr)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+
+      {showAdd && <AddAccountModal engId={eng.id} onClose={()=>setShowAdd(false)} onSaved={()=>{reload();setShowAdd(false);}}/>}
+      {showUpload && <UploadGLModal engId={eng.id} onClose={()=>setShowUpload(false)} onImported={()=>{reload();setShowUpload(false);}}/>}
+    </div>
+  );
+}
+
+function AddAccountModal({ engId, onClose, onSaved }) {
+  const { toast } = useApp();
+  const [form, setForm] = useState({ code:'', name:'', type:'ASSET', unadj_dr:0, unadj_cr:0 });
+  const [loading, setLoading] = useState(false);
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  const submit = async () => {
+    setLoading(true);
+    const { error } = await sb.from('accounts').insert({ ...form, engagement_id: engId,
+      unadj_dr: Number(form.unadj_dr)||0, unadj_cr: Number(form.unadj_cr)||0 });
+    if (error) { toast(error.message,'error'); setLoading(false); return; }
+    toast('Account added','success'); onSaved();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal">
+        <div className="modal-header"><h3>Add Account</h3><button className="btn btn-ghost btn-icon" onClick={onClose}><Ic.X/></button></div>
+        <div className="modal-body">
+          <div className="form-grid-2">
+            <div className="form-row"><label>Code</label><input value={form.code} onChange={e=>set('code',e.target.value)} placeholder="1010"/></div>
+            <div className="form-row"><label>Type</label>
+              <select value={form.type} onChange={e=>set('type',e.target.value)}>
+                {['ASSET','LIABILITY','EQUITY','INCOME','COGS','EXPENSE','OTHER'].map(t=><option key={t}>{t}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="form-row"><label>Account Name</label><input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Cash and Cash Equivalents" autoFocus/></div>
+          <div className="form-grid-2">
+            <div className="form-row"><label>Unadj DR</label><input type="number" value={form.unadj_dr} onChange={e=>set('unadj_dr',e.target.value)}/></div>
+            <div className="form-row"><label>Unadj CR</label><input type="number" value={form.unadj_cr} onChange={e=>set('unadj_cr',e.target.value)}/></div>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={submit} disabled={loading||!form.name.trim()}>
+            {loading?<span className="spinner"/>:'Add Account'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UploadGLModal({ engId, onClose, onImported }) {
+  const { toast } = useApp();
+  const [dragging, setDragging] = useState(false);
+  const [preview, setPreview] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const inputRef = useRef();
+
+  const processFile = (file) => {
+    Papa.parse(file, {
+      header: true, skipEmptyLines: true,
+      complete: ({ data }) => {
+        const mapped = data.map(r => ({
+          code: r.Code || r.code || r.AccountCode || '',
+          name: r.Name || r.name || r.AccountName || r.Account || '',
+          type: (r.Type || r.type || r.AccountType || 'ASSET').toUpperCase(),
+          unadj_dr: parseFloat(r.DR || r.Dr || r.Debit || r.debit || 0)||0,
+          unadj_cr: parseFloat(r.CR || r.Cr || r.Credit || r.credit || 0)||0,
+        })).filter(r => r.name);
+        setPreview(mapped);
+      }
+    });
+  };
+
+  const onDrop = (e) => {
+    e.preventDefault(); setDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file) processFile(file);
+  };
+
+  const importAll = async () => {
+    setLoading(true);
+    const rows = preview.map((r,i) => ({ ...r, engagement_id: engId, sort_order: i, type: ['ASSET','LIABILITY','EQUITY','INCOME','COGS','EXPENSE','OTHER'].includes(r.type) ? r.type : 'ASSET' }));
+    // Clear existing first
+    await sb.from('accounts').delete().eq('engagement_id', engId);
+    const { error } = await sb.from('accounts').insert(rows);
+    if (error) { toast(error.message,'error'); setLoading(false); return; }
+    toast(`Imported ${rows.length} accounts`, 'success');
+    onImported();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:600}}>
+        <div className="modal-header"><h3>Import GL / Trial Balance</h3><button className="btn btn-ghost btn-icon" onClick={onClose}><Ic.X/></button></div>
+        <div className="modal-body">
+          <p style={{fontSize:12,color:'var(--muted)',marginBottom:12}}>
+            Upload a CSV with columns: Code, Name, Type (ASSET/LIABILITY/EQUITY/INCOME/COGS/EXPENSE/OTHER), DR, CR
+          </p>
+          <div
+            style={{border:`2px dashed ${dragging?'var(--amber)':'var(--border)'}`,borderRadius:8,padding:32,textAlign:'center',cursor:'pointer',transition:'all .15s'}}
+            onDragOver={e=>{e.preventDefault();setDragging(true)}}
+            onDragLeave={()=>setDragging(false)}
+            onDrop={onDrop}
+            onClick={()=>inputRef.current.click()}
+          >
+            <input ref={inputRef} type="file" accept=".csv" style={{display:'none'}} onChange={e=>processFile(e.target.files[0])}/>
+            <Ic.Upload/> <span style={{marginLeft:6,fontSize:13}}>Drop CSV here or click to browse</span>
+          </div>
+          {preview.length > 0 && (
+            <div style={{marginTop:12}}>
+              <div style={{fontSize:12,color:'var(--muted)',marginBottom:6}}>Preview ({preview.length} accounts):</div>
+              <div style={{maxHeight:200,overflowY:'auto',border:'1px solid var(--border)',borderRadius:4}}>
+                <table style={{width:'100%',fontSize:12}}>
+                  <thead><tr><th style={{padding:'4px 8px',background:'#f0efe9'}}>Code</th><th style={{padding:'4px 8px',background:'#f0efe9'}}>Name</th><th style={{padding:'4px 8px',background:'#f0efe9'}}>Type</th><th style={{padding:'4px 8px',background:'#f0efe9',textAlign:'right'}}>DR</th><th style={{padding:'4px 8px',background:'#f0efe9',textAlign:'right'}}>CR</th></tr></thead>
+                  <tbody>{preview.slice(0,10).map((r,i)=><tr key={i}><td style={{padding:'3px 8px'}}>{r.code}</td><td style={{padding:'3px 8px'}}>{r.name}</td><td style={{padding:'3px 8px'}}>{r.type}</td><td style={{padding:'3px 8px',textAlign:'right'}}>{r.unadj_dr||''}</td><td style={{padding:'3px 8px',textAlign:'right'}}>{r.unadj_cr||''}</td></tr>)}</tbody>
+                </table>
+                {preview.length>10&&<div style={{padding:'4px 8px',fontSize:11,color:'var(--muted)'}}>…and {preview.length-10} more</div>}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={importAll} disabled={loading||preview.length===0}>
+            {loading?<span className="spinner"/>:`Import ${preview.length} Accounts`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ADJUSTING ENTRIES TAB
+// ═══════════════════════════════════════════════════════════════
+function AdjEntriesTab({ eng, accounts, headers, lines, reload }) {
+  const { toast, isStaff } = useApp();
+  const [showNew, setShowNew] = useState(false);
+  const [expanded, setExpanded] = useState({});
+
+  const delHeader = async (hid) => {
+    if (!confirm('Delete this AJE and all its lines?')) return;
+    const { error } = await sb.from('aje_headers').delete().eq('id', hid);
+    if (error) { toast(error.message,'error'); return; }
+    toast('AJE deleted','success'); reload();
+  };
+
+  return (
+    <div>
+      <div className="flex-between">
+        <div><div className="page-title" style={{fontSize:16}}>Adjusting Journal Entries</div>
+          <div className="page-sub">{headers.length} entries</div></div>
+        {isStaff && <button className="btn btn-primary btn-sm" onClick={()=>setShowNew(true)}><Ic.Plus/> New AJE</button>}
+      </div>
+
+      {headers.length === 0 ? (
+        <div className="empty">No adjusting entries yet.</div>
+      ) : (
+        <div style={{display:'flex',flexDirection:'column',gap:8}}>
+          {headers.map(h => {
+            const hLines = lines.filter(l=>l.aje_header_id===h.id);
+            const totDr = hLines.reduce((s,l)=>s+Number(l.dr||0),0);
+            const totCr = hLines.reduce((s,l)=>s+Number(l.cr||0),0);
+            const balanced = Math.abs(totDr-totCr)<0.01;
+            const open = expanded[h.id];
+            return (
+              <div key={h.id} className="card">
+                <div style={{display:'flex',alignItems:'center',gap:12,padding:'10px 14px',cursor:'pointer'}} onClick={()=>setExpanded(e=>({...e,[h.id]:!e[h.id]}))}>
+                  <strong style={{fontFamily:'monospace',fontSize:12,color:'var(--muted)'}}>{h.reference||'—'}</strong>
+                  <span>{h.date}</span>
+                  <span style={{flex:1,color:'var(--muted)',fontSize:12}}>{h.memo}</span>
+                  <span className={`tag ${balanced?'tag-green':'tag-red'}`}>{balanced?'Balanced':'Unbalanced'}</span>
+                  <span style={{fontFamily:'monospace',fontSize:13}}>{fmt(totDr)}</span>
+                  {isStaff && <button className="btn btn-ghost btn-sm btn-icon" onClick={e=>{e.stopPropagation();delHeader(h.id);}} title="Delete"><Ic.X/></button>}
+                </div>
+                {open && (
+                  <div style={{borderTop:'1px solid var(--border)',padding:'8px 14px'}}>
+                    <table style={{width:'100%',fontSize:12}}>
+                      <thead><tr><th style={{padding:'4px 8px',textAlign:'left'}}>Account</th><th style={{padding:'4px 8px',textAlign:'right'}}>DR</th><th style={{padding:'4px 8px',textAlign:'right'}}>CR</th></tr></thead>
+                      <tbody>
+                        {hLines.map(l=>{
+                          const acct = accounts.find(a=>a.id===l.account_id);
+                          return <tr key={l.id}><td style={{padding:'3px 8px'}}>{acct?.name||'Unknown'}</td><td style={{padding:'3px 8px',textAlign:'right'}}>{Number(l.dr)>0?fmt(l.dr):''}</td><td style={{padding:'3px 8px',textAlign:'right'}}>{Number(l.cr)>0?fmt(l.cr):''}</td></tr>;
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {showNew && <NewAJEModal eng={eng} accounts={accounts} onClose={()=>setShowNew(false)} onSaved={()=>{reload();setShowNew(false);}}/>}
+    </div>
+  );
+}
+
+function NewAJEModal({ eng, accounts, onClose, onSaved }) {
+  const { toast, session } = useApp();
+  const [header, setHeader] = useState({ date: new Date().toISOString().slice(0,10), reference:'', memo:'' });
+  const [lines, setLines] = useState([{account_id:'',dr:0,cr:0},{account_id:'',dr:0,cr:0}]);
+  const [loading, setLoading] = useState(false);
+
+  const setH = (k,v) => setHeader(h=>({...h,[k]:v}));
+  const setL = (i,k,v) => setLines(ls => ls.map((l,j)=>j===i?{...l,[k]:v}:l));
+  const addLine = () => setLines(ls=>[...ls,{account_id:'',dr:0,cr:0}]);
+  const remLine = (i) => setLines(ls=>ls.filter((_,j)=>j!==i));
+
+  const totDr = lines.reduce((s,l)=>s+Number(l.dr||0),0);
+  const totCr = lines.reduce((s,l)=>s+Number(l.cr||0),0);
+  const balanced = Math.abs(totDr-totCr)<0.01;
+
+  const submit = async () => {
+    if (!balanced) { toast('Debits must equal credits','error'); return; }
+    const validLines = lines.filter(l=>l.account_id);
+    if (validLines.length < 2) { toast('Need at least 2 lines','error'); return; }
+    setLoading(true);
+    const { data: hData, error: hErr } = await sb.from('aje_headers').insert({
+      ...header, engagement_id: eng.id, posted_by: session.user.id
+    }).select().single();
+    if (hErr) { toast(hErr.message,'error'); setLoading(false); return; }
+    const { error: lErr } = await sb.from('aje_lines').insert(
+      validLines.map(l=>({ aje_header_id: hData.id, account_id: l.account_id, dr: Number(l.dr)||0, cr: Number(l.cr)||0 }))
+    );
+    if (lErr) { toast(lErr.message,'error'); setLoading(false); return; }
+    // Log action
+    await sb.from('audit_log').insert({ engagement_id: eng.id, user_id: session.user.id, action:'aje_posted', detail:{ reference: header.reference } });
+    toast('AJE posted','success'); onSaved();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:600}}>
+        <div className="modal-header"><h3>New Adjusting Journal Entry</h3><button className="btn btn-ghost btn-icon" onClick={onClose}><Ic.X/></button></div>
+        <div className="modal-body">
+          <div className="form-grid-2">
+            <div className="form-row"><label>Date</label><input type="date" value={header.date} onChange={e=>setH('date',e.target.value)}/></div>
+            <div className="form-row"><label>Reference #</label><input value={header.reference} onChange={e=>setH('reference',e.target.value)} placeholder="AJE-001"/></div>
+          </div>
+          <div className="form-row"><label>Memo</label><input value={header.memo} onChange={e=>setH('memo',e.target.value)} placeholder="Depreciation adjustment"/></div>
+          <div className="divider"/>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 100px 100px 28px',gap:6,fontSize:12,fontWeight:700,color:'var(--muted)',marginBottom:4}}>
+            <span>Account</span><span style={{textAlign:'right'}}>DR</span><span style={{textAlign:'right'}}>CR</span><span/>
+          </div>
+          {lines.map((l,i)=>(
+            <div key={i} style={{display:'grid',gridTemplateColumns:'1fr 100px 100px 28px',gap:6,marginBottom:6}}>
+              <select value={l.account_id} onChange={e=>setL(i,'account_id',e.target.value)}>
+                <option value="">Select account…</option>
+                {accounts.map(a=><option key={a.id} value={a.id}>{a.code?`${a.code} · `:''}{a.name}</option>)}
+              </select>
+              <input type="number" value={l.dr||''} placeholder="0.00" onChange={e=>{setL(i,'dr',e.target.value);if(e.target.value)setL(i,'cr',0);}} style={{textAlign:'right'}}/>
+              <input type="number" value={l.cr||''} placeholder="0.00" onChange={e=>{setL(i,'cr',e.target.value);if(e.target.value)setL(i,'dr',0);}} style={{textAlign:'right'}}/>
+              <button className="btn btn-ghost btn-icon" onClick={()=>remLine(i)} disabled={lines.length<=2}><Ic.X/></button>
+            </div>
+          ))}
+          <button className="btn btn-ghost btn-sm" onClick={addLine}><Ic.Plus/> Add Line</button>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 100px 100px 28px',gap:6,marginTop:8,fontSize:12,fontWeight:700}}>
+            <span style={{textAlign:'right',gridColumn:'1/2'}}>Totals:</span>
+            <span style={{textAlign:'right',color:balanced?'var(--success)':'var(--danger)'}}>{fmt(totDr)}</span>
+            <span style={{textAlign:'right',color:balanced?'var(--success)':'var(--danger)'}}>{fmt(totCr)}</span>
+            <span/>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={submit} disabled={loading||!balanced}>
+            {loading?<span className="spinner"/>:'Post AJE'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TAX MAPPING TAB
+// ═══════════════════════════════════════════════════════════════
+function TaxMappingTab({ eng, accounts, mappings, getAdjBal, reload }) {
+  const { toast, isStaff } = useApp();
+  const [pending, setPending] = useState({});
+
+  const currentMap = {};
+  mappings.forEach(m => { currentMap[m.account_id] = m.tax_line; });
+
+  const lines = DRAKE_LINES[eng.entity_type]?.lines || [];
+
+  const suggestLine = (acct) => {
+    const n = (acct.name+' '+acct.code).toLowerCase();
+    const t = acct.type;
+    if (t==='ASSET') {
+      if(n.includes('cash'))return'L1';
+      if(n.includes('receiv'))return'L2';
+      if(n.includes('inventor'))return'L4';
+      if(n.includes('building')||n.includes('equipment'))return eng.entity_type==='Partnership'?'L9':'L12';
+      if(n.includes('land'))return'L13';
+      return 'L6';
+    }
+    if (t==='LIABILITY') {
+      if(n.includes('accounts pay'))return'L18';
+      if(n.includes('note')||n.includes('mortg'))return'L19';
+      return 'L20';
+    }
+    if (t==='EQUITY') return 'L27';
+    if (t==='INCOME') return '1a';
+    if (t==='COGS') return '2';
+    if (t==='EXPENSE') {
+      if(n.includes('deprec'))return'14';
+      if(n.includes('salari')||n.includes('wage'))return'8';
+      if(n.includes('rent'))return'11';
+      if(n.includes('interest'))return'13';
+      if(n.includes('adverti'))return'16';
+      return '19';
+    }
+    return '';
+  };
+
+  const setMap = (accountId, val) => {
+    setPending(p => ({...p, [accountId]: val}));
+  };
+
+  const saveAll = async () => {
+    const toSave = Object.entries({...currentMap, ...pending}).filter(([,v])=>v);
+    // Upsert each
+    for (const [accountId, tax_line] of toSave) {
+      await sb.from('tax_mappings').upsert({
+        engagement_id: eng.id, account_id: accountId, tax_line
+      }, { onConflict: 'engagement_id,account_id' });
+    }
+    toast('Tax mappings saved','success');
+    setPending({});
+    reload();
+  };
+
+  const autoSuggest = () => {
+    const suggestions = {};
+    accounts.forEach(a => { if (!currentMap[a.id]) suggestions[a.id] = suggestLine(a); });
+    setPending(p=>({...p,...suggestions}));
+    toast('Suggestions applied — review and save','info');
+  };
+
+  const changed = Object.keys(pending).length > 0;
+
+  return (
+    <div>
+      <div className="flex-between">
+        <div><div className="page-title" style={{fontSize:16}}>Drake Tax Line Mapping</div>
+          <div className="page-sub">{eng.entity_type} — {mappings.length} of {accounts.length} mapped</div></div>
+        {isStaff && <div className="flex-gap">
+          <button className="btn btn-secondary btn-sm" onClick={autoSuggest}>Auto-suggest</button>
+          {changed && <button className="btn btn-primary btn-sm" onClick={saveAll}>Save Mappings</button>}
+        </div>}
+      </div>
+
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>Code</th><th>Account</th><th>Type</th><th className="num">Adj Balance</th><th>Drake Line</th></tr></thead>
+          <tbody>
+            {accounts.map(a => {
+              const val = pending[a.id] !== undefined ? pending[a.id] : (currentMap[a.id]||'');
+              const bal = getAdjBal(a);
+              const lineLabel = lines.find(l=>l.code===val);
+              return (
+                <tr key={a.id}>
+                  <td style={{fontFamily:'monospace',fontSize:12,color:'var(--muted)'}}>{a.code}</td>
+                  <td>{a.name}</td>
+                  <td><span style={{fontSize:11,color:'var(--muted)',fontWeight:600}}>{a.type}</span></td>
+                  <td className="num" style={{color:bal>=0?'var(--text)':'var(--danger)'}}>{fmt(Math.abs(bal))}</td>
+                  <td>
+                    {isStaff ? (
+                      <select value={val} onChange={e=>setMap(a.id,e.target.value)} style={{width:'auto',minWidth:180}}>
+                        <option value="">— Unmapped —</option>
+                        {lines.map(l=><option key={l.code} value={l.code}>{l.code}: {l.label}</option>)}
+                      </select>
+                    ) : (
+                      <span>{val ? `${val}: ${lineLabel?.label||''}` : <em style={{color:'var(--muted)'}}>Unmapped</em>}</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// REPORTS TAB
+// ═══════════════════════════════════════════════════════════════
+function ReportsTab({ eng, accounts, adjMap, headers, mappings, getAdjBal, reload }) {
+  const { toast, session } = useApp();
+  const [beanLoading, setBeanLoading] = useState(false);
+  const [drakeLoading, setDrakeLoading] = useState(false);
+  const [beanPreview, setBeanPreview] = useState('');
+
+  const getAdj = (a) => adjMap[a.id] || {dr:0,cr:0};
+
+  // Client-side Drake XLSX export (no API needed for basic version)
+  const exportDrake = async () => {
+    setDrakeLoading(true);
+    try {
+      const currentMap = {};
+      mappings.forEach(m => { currentMap[m.account_id] = m.tax_line; });
+
+      const wb = XLSX.utils.book_new();
+
+      // Sheet 1: Info
+      const info = [
+        ['Client', eng.client_name],
+        ['Fiscal Year', eng.fiscal_year],
+        ['Entity Type', eng.entity_type],
+        ['Export Date', new Date().toLocaleDateString('en-US')],
+        ['Prepared By', 'Ledgerline Cloud'],
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(info), 'Info');
+
+      // Sheet 2: Trial Balance Detail
+      const tbHeaders = ['Code','Account Name','Type','Unadj DR','Unadj CR','Adj DR','Adj CR','Final DR','Final CR','Drake Line'];
+      const tbRows = accounts.map(a => {
+        const adj = getAdj(a);
+        const bal = getAdjBal(a);
+        return [
+          a.code, a.name, a.type,
+          Number(a.unadj_dr)||0, Number(a.unadj_cr)||0,
+          adj.dr, adj.cr,
+          bal>0?bal:0, bal<0?Math.abs(bal):0,
+          currentMap[a.id]||''
+        ];
+      });
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([tbHeaders,...tbRows]), 'Trial Balance');
+
+      // Sheet 3: By Drake Tax Line
+      const lineMap = {};
+      accounts.forEach(a => {
+        const line = currentMap[a.id];
+        if (!line) return;
+        const bal = getAdjBal(a);
+        if (!lineMap[line]) lineMap[line] = 0;
+        lineMap[line] += bal;
+      });
+      const taxLines = DRAKE_LINES[eng.entity_type]?.lines || [];
+      const byLine = [['Drake Line','Description','Amount']];
+      taxLines.forEach(l => {
+        if (lineMap[l.code] !== undefined) byLine.push([l.code, l.label, lineMap[l.code]]);
+      });
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(byLine), 'By Tax Line');
+
+      XLSX.writeFile(wb, `${eng.client_name}_${eng.fiscal_year}_Drake.xlsx`);
+      // Log
+      await sb.from('audit_log').insert({ engagement_id: eng.id, user_id: session.user.id, action:'drake_exported' });
+      toast('Drake export downloaded','success');
+    } catch(e) {
+      toast(e.message,'error');
+    }
+    setDrakeLoading(false);
+  };
+
+  // Build beancount via Python API (or generate client-side fallback)
+  const buildBeancount = async () => {
+    setBeanLoading(true);
+    try {
+      const token = (await sb.auth.getSession()).data.session?.access_token;
+      // Try the Python API first
+      const payload = {
+        engagement: { id: eng.id, client_name: eng.client_name, fiscal_year: eng.fiscal_year, entity_type: eng.entity_type },
+        accounts: accounts.map(a=>({...a, unadj_dr:Number(a.unadj_dr), unadj_cr:Number(a.unadj_cr)})),
+        aje_headers: headers,
+        aje_lines: Object.entries(adjMap).flatMap(([aid, adj])=>[
+          ...(adj.dr>0?[{account_id:aid,dr:adj.dr,cr:0}]:[]),
+          ...(adj.cr>0?[{account_id:aid,dr:0,cr:adj.cr}]:[]),
+        ]),
+        tax_mappings: mappings,
+      };
+
+      let beancountText;
+      try {
+        const resp = await fetch(`${API_BASE}/build-beancount`, {
+          method:'POST', headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},
+          body: JSON.stringify(payload), signal: AbortSignal.timeout(10000)
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        const data = await resp.json();
+        beancountText = data.beancount;
+      } catch {
+        // Client-side fallback
+        beancountText = buildBeancountClientSide(eng, accounts, headers, adjMap, mappings);
+      }
+
+      setBeanPreview(beancountText);
+      // Save to Supabase
+      await sb.from('engagements').update({ beancount_content: beancountText }).eq('id', eng.id);
+      toast('Beancount file generated','success');
+    } catch(e) {
+      toast(e.message,'error');
+    }
+    setBeanLoading(false);
+  };
+
+  const downloadBeancount = () => {
+    if (!beanPreview) return;
+    const blob = new Blob([beanPreview], {type:'text/plain'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href=url; a.download=`${eng.client_name}_${eng.fiscal_year}.beancount`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportCSV = () => {
+    const rows = [['Code','Account','Type','Unadj DR','Unadj CR','Adj DR','Adj CR','Final DR','Final CR']];
+    accounts.forEach(a=>{
+      const adj=getAdj(a), bal=getAdjBal(a);
+      rows.push([a.code,a.name,a.type,a.unadj_dr,a.unadj_cr,adj.dr,adj.cr,bal>0?bal:0,bal<0?Math.abs(bal):0]);
+    });
+    const csv = rows.map(r=>r.join(',')).join('\n');
+    const blob = new Blob([csv],{type:'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href=url; a.download=`${eng.client_name}_${eng.fiscal_year}_TB.csv`; a.click();
+    URL.revokeObjectURL(url);
+    toast('CSV downloaded','success');
+  };
+
+  // KPIs
+  const totAssets = accounts.filter(a=>a.type==='ASSET').reduce((s,a)=>s+Math.max(0,getAdjBal(a)),0);
+  const totLiab = accounts.filter(a=>a.type==='LIABILITY').reduce((s,a)=>s+Math.abs(Math.min(0,getAdjBal(a))),0);
+  const totIncome = accounts.filter(a=>['INCOME'].includes(a.type)).reduce((s,a)=>s+Math.abs(getAdjBal(a)),0);
+  const totExpense = accounts.filter(a=>['EXPENSE','COGS'].includes(a.type)).reduce((s,a)=>s+Math.abs(getAdjBal(a)),0);
+  const netIncome = totIncome - totExpense;
+
+  return (
+    <div>
+      <div className="kpi-grid">
+        <div className="kpi-card"><div className="kpi-label">Total Assets</div><div className="kpi-value">{fmt(totAssets)}</div></div>
+        <div className="kpi-card"><div className="kpi-label">Total Liabilities</div><div className="kpi-value">{fmt(totLiab)}</div></div>
+        <div className="kpi-card"><div className="kpi-label">Revenue</div><div className="kpi-value pos">{fmt(totIncome)}</div></div>
+        <div className="kpi-card"><div className="kpi-label">Expenses</div><div className="kpi-value neg">{fmt(totExpense)}</div></div>
+        <div className="kpi-card"><div className="kpi-label">Net Income</div><div className={`kpi-value ${netIncome>=0?'pos':'neg'}`}>{fmt(netIncome)}</div></div>
+      </div>
+
+      <div className="card" style={{padding:20,marginBottom:16}}>
+        <div style={{fontWeight:700,marginBottom:12}}>Export Files</div>
+        <div className="flex-gap" style={{flexWrap:'wrap'}}>
+          <button className="btn btn-secondary" onClick={exportCSV}><Ic.Down/> TB as CSV</button>
+          <button className="btn btn-primary" onClick={exportDrake} disabled={drakeLoading}>
+            {drakeLoading?<span className="spinner"/>:<><Ic.Down/> Drake XLSX</>}
+          </button>
+          <button className="btn btn-secondary" onClick={buildBeancount} disabled={beanLoading}>
+            {beanLoading?<span className="spinner"/>:<><Ic.Refresh/> Generate Beancount</>}
+          </button>
+          {beanPreview && <button className="btn btn-secondary" onClick={downloadBeancount}><Ic.Down/> Download .beancount</button>}
+        </div>
+      </div>
+
+      {beanPreview && (
+        <div className="card" style={{padding:16}}>
+          <div style={{fontWeight:700,marginBottom:8,fontSize:13}}>Beancount Preview</div>
+          <pre style={{fontSize:11,lineHeight:1.5,overflow:'auto',maxHeight:400,background:'#f8f7f3',padding:12,borderRadius:4,border:'1px solid var(--border)'}}>{beanPreview.slice(0,3000)}{beanPreview.length>3000?'\n…(truncated for preview)':''}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Client-side beancount generator (fallback when API unavailable)
+function buildBeancountClientSide(eng, accounts, headers, adjMap, mappings) {
+  const slug = (s) => s.replace(/[^a-zA-Z0-9]+/g,' ').trim().split(' ').map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join('');
+  const prefix = (type) => ({ASSET:'Assets',LIABILITY:'Liabilities',EQUITY:'Equity',INCOME:'Income',COGS:'Expenses',EXPENSE:'Expenses',OTHER:'Expenses'})[type]||'Expenses';
+  const lines = [];
+  lines.push(`; Ledgerline — ${eng.client_name} ${eng.fiscal_year}`);
+  lines.push(`option "title" "${eng.client_name} — FY${eng.fiscal_year}"`);
+  lines.push(`option "operating_currency" "USD"`);
+  lines.push('');
+  // Opens
+  lines.push('; Account Declarations');
+  accounts.forEach(a => lines.push(`${eng.fiscal_year}-01-01 open ${prefix(a.type)}:${slug(a.name)} USD`));
+  lines.push(`${eng.fiscal_year}-01-01 open Equity:OpeningBalances USD`);
+  lines.push('');
+  // Opening TB
+  lines.push(`; Opening Trial Balance`);
+  lines.push(`${eng.fiscal_year}-01-01 * "Opening trial balance as of ${eng.fiscal_year}"`);
+  let plug = 0;
+  accounts.forEach(a => {
+    const dr = Number(a.unadj_dr||0), cr = Number(a.unadj_cr||0);
+    const net = dr - cr;
+    if (Math.abs(net)>0.001) {
+      lines.push(`  ${prefix(a.type)}:${slug(a.name)} ${net.toFixed(2)} USD`);
+      plug -= net;
+    }
+  });
+  lines.push(`  Equity:OpeningBalances ${plug.toFixed(2)} USD`);
+  lines.push('');
+  return lines.join('\n');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ADMIN PAGES
+// ═══════════════════════════════════════════════════════════════
+function UsersPage() {
+  const { toast, session } = useApp();
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showInvite, setShowInvite] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    const { data } = await sb.from('profiles').select('*').order('created_at');
+    setUsers(data||[]);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const changeRole = async (uid, role) => {
+    const { error } = await sb.from('profiles').update({ role }).eq('id', uid);
+    if (error) { toast(error.message,'error'); return; }
+    toast('Role updated','success'); load();
+  };
+
+  const tagFor = (r) => ({ admin:'tag-orange', staff:'tag-green', client:'tag-blue' })[r]||'tag-blue';
+
+  return (
+    <div>
+      <div className="flex-between">
+        <div><div className="page-title">User Management</div>
+          <div className="page-sub">{users.length} users</div></div>
+        <button className="btn btn-primary btn-sm" onClick={()=>setShowInvite(true)}><Ic.Plus/> Invite User</button>
+      </div>
+
+      {loading ? <div className="empty"><span className="spinner dark"/></div> : (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Joined</th><th>Change Role</th></tr></thead>
+            <tbody>
+              {users.map(u=>(
+                <tr key={u.id}>
+                  <td>{u.full_name||'—'}</td>
+                  <td>{u.email}</td>
+                  <td><span className={`tag ${tagFor(u.role)}`}>{u.role}</span></td>
+                  <td>{fmtDate(u.created_at)}</td>
+                  <td>
+                    {u.id !== session.user.id ? (
+                      <select value={u.role} onChange={e=>changeRole(u.id,e.target.value)} style={{width:'auto'}}>
+                        <option value="admin">admin</option>
+                        <option value="staff">staff</option>
+                        <option value="client">client</option>
+                      </select>
+                    ) : <em style={{color:'var(--muted)',fontSize:12}}>You</em>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {showInvite && <InviteUserModal onClose={()=>setShowInvite(false)} onInvited={()=>{load();setShowInvite(false);}}/>}
+    </div>
+  );
+}
+
+function InviteUserModal({ onClose, onInvited }) {
+  const { toast } = useApp();
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState('staff');
+  const [loading, setLoading] = useState(false);
+  const [info, setInfo] = useState('');
+
+  const submit = async () => {
+    setLoading(true);
+    // Supabase admin invite (requires admin API — this triggers a signup email)
+    const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+    if (error) { toast(error.message,'error'); setLoading(false); return; }
+    setInfo(`Invite sent to ${email}. Ask them to check their email.`);
+    setLoading(false);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal">
+        <div className="modal-header"><h3>Invite User</h3><button className="btn btn-ghost btn-icon" onClick={onClose}><Ic.X/></button></div>
+        <div className="modal-body">
+          <p style={{fontSize:12,color:'var(--muted)',marginBottom:12}}>
+            The invited user will receive a magic-link email to set up their account. You can change their role after they join.
+          </p>
+          <div className="form-row"><label>Email</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="client@company.com" autoFocus/></div>
+          <div className="form-row"><label>Initial Role</label>
+            <select value={role} onChange={e=>setRole(e.target.value)}>
+              <option value="staff">Staff</option>
+              <option value="client">Client</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          {info && <div style={{fontSize:12,color:'var(--success)',marginTop:8}}>{info}</div>}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+          {!info && <button className="btn btn-primary" onClick={submit} disabled={loading||!email}>
+            {loading?<span className="spinner"/>:'Send Invite'}
+          </button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AuditPage() {
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [profiles, setProfiles] = useState({});
+
+  useEffect(()=>{
+    Promise.all([
+      sb.from('audit_log').select('*, engagements(client_name)').order('created_at',{ascending:false}).limit(200),
+      sb.from('profiles').select('id,full_name,email'),
+    ]).then(([{data:logData},{data:profData}])=>{
+      setLogs(logData||[]);
+      const pm = {};
+      (profData||[]).forEach(p=>pm[p.id]=p.full_name||p.email);
+      setProfiles(pm);
+      setLoading(false);
+    });
+  },[]);
+
+  const actionLabel = (a) => ({
+    aje_posted:'Posted AJE', drake_exported:'Exported Drake', accounts_imported:'Imported Accounts'
+  })[a]||a;
+
+  return (
+    <div>
+      <div className="page-title">Audit Log</div>
+      <div className="page-sub" style={{marginBottom:16}}>Last 200 actions</div>
+      {loading ? <div className="empty"><span className="spinner dark"/></div> : (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Engagement</th><th>Detail</th></tr></thead>
+            <tbody>
+              {logs.map(l=>(
+                <tr key={l.id}>
+                  <td style={{fontFamily:'monospace',fontSize:11,color:'var(--muted)'}}>{new Date(l.created_at).toLocaleString()}</td>
+                  <td>{profiles[l.user_id]||'—'}</td>
+                  <td><span className="tag tag-green">{actionLabel(l.action)}</span></td>
+                  <td>{l.engagements?.client_name||'—'}</td>
+                  <td style={{fontSize:11,color:'var(--muted)'}}>{JSON.stringify(l.detail)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ROOT
+// ═══════════════════════════════════════════════════════════════
+function Root() {
+  const [session, setSession] = useState(undefined); // undefined = loading
+  const [authMode, setAuthMode] = useState('login');
+
+  useEffect(() => {
+    sb.auth.getSession().then(({ data: { session } }) => setSession(session));
+    const { data: { subscription } } = sb.auth.onAuthStateChange((_e, session) => setSession(session));
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (session === undefined) return (
+    <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',background:'var(--green)'}}>
+      <span className="spinner" style={{width:32,height:32,borderWidth:3}}/>
+    </div>
+  );
+
+  if (!session) return <AuthPage mode={authMode} onSwitch={setAuthMode} onSuccess={setSession}/>;
+
+  return <AppShell session={session}/>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Root/>);
+</script>
+</body>
+</html>
