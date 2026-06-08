@@ -643,23 +643,25 @@ function EngagementPage({ id, onBack, tab, setTab }) {
   const [ajeHeaders, setAjeHeaders] = useState([]);
   const [ajeLines, setAjeLines] = useState([]);
   const [mappings, setMappings] = useState([]);
+  const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const reload = useCallback(async () => {
-    const [engR, accR, ajeHR, ajeLR, mapR] = await Promise.all([
+    const headerIds = (await sb.from('aje_headers').select('id').eq('engagement_id',id)).data?.map(h=>h.id) || [];
+    const [engR, accR, ajeHR, ajeLR, mapR, classR] = await Promise.all([
       sb.from('engagements').select('*').eq('id',id).single(),
       sb.from('accounts').select('*').eq('engagement_id',id).order('sort_order'),
       sb.from('aje_headers').select('*').eq('engagement_id',id).order('date'),
-      sb.from('aje_lines').select('*').in('aje_header_id',
-        (await sb.from('aje_headers').select('id').eq('engagement_id',id)).data?.map(h=>h.id) || []
-      ),
+      headerIds.length ? sb.from('aje_lines').select('*').in('aje_header_id', headerIds) : Promise.resolve({data:[]}),
       sb.from('tax_mappings').select('*').eq('engagement_id',id),
+      sb.from('classes').select('*').eq('engagement_id',id).order('name'),
     ]);
     setEng(engR.data);
     setAccounts(accR.data||[]);
     setAjeHeaders(ajeHR.data||[]);
     setAjeLines(ajeLR.data||[]);
     setMappings(mapR.data||[]);
+    setClasses(classR.data||[]);
     setLoading(false);
   }, [id]);
 
@@ -697,15 +699,16 @@ function EngagementPage({ id, onBack, tab, setTab }) {
       </div>
 
       <div className="tabs" style={{marginTop:12}}>
-        {[['tb','Trial Balance'],['aje','Adj. Entries'],['tax','Tax Mapping'],['reports','Reports']].map(([k,l])=>(
+        {[['tb','Trial Balance'],['aje','Adj. Entries'],['tax','Tax Mapping'],['reports','Reports'],['classes','Classes']].map(([k,l])=>(
           <div key={k} className={`tab ${tab===k?'active':''}`} onClick={()=>setTab(k)}>{l}</div>
         ))}
       </div>
 
       {tab==='tb'      && <TrialBalanceTab eng={eng} accounts={accounts} adjMap={adjMap} reload={reload} getAdj={getAdj} getAdjBal={getAdjBal}/>}
-      {tab==='aje'     && <AdjEntriesTab eng={eng} accounts={accounts} headers={ajeHeaders} lines={ajeLines} reload={reload}/>}
+      {tab==='aje'     && <AdjEntriesTab eng={eng} accounts={accounts} headers={ajeHeaders} lines={ajeLines} classes={classes} reload={reload}/>}
       {tab==='tax'     && <TaxMappingTab eng={eng} accounts={accounts} mappings={mappings} getAdjBal={getAdjBal} reload={reload}/>}
-      {tab==='reports' && <ReportsTab eng={eng} accounts={accounts} adjMap={adjMap} headers={ajeHeaders} mappings={mappings} getAdjBal={getAdjBal} reload={reload}/>}
+      {tab==='reports' && <ReportsTab eng={eng} accounts={accounts} adjMap={adjMap} headers={ajeHeaders} ajeLines={ajeLines} mappings={mappings} classes={classes} getAdjBal={getAdjBal} reload={reload}/>}
+      {tab==='classes' && <ClassManagement eng={eng} classes={classes} reload={reload}/>}
     </div>
   );
 }
@@ -847,16 +850,19 @@ function UploadGLModal({ engId, onClose, onImported }) {
   const [status, setStatus] = useState('');
   const inputRef = useRef();
 
+  // ── Fuzzy column finder ────────────────────────────────────────
   const ALIASES = {
-    code:    ['code','acct','account_code','account code','acct#','account number','account_number','gl_code','gl code','acct no','number','num','no','account no'],
-    name:    ['name','account','account_name','account name','description','desc','account_description','title','account title','gl account','account title'],
-    type:    ['type','account_type','account type','acct_type','acct type','class','classification','category'],
+    code:    ['code','acct','account_code','account code','acct#','account #','account#','acct #','gl #','gl#','account number','account_number','gl_code','gl code','acct no','number','num','no','account no'],
+    name:    ['name','account','account_name','account name','description','desc','account_description','title','account title','gl account'],
+    subname: ['sub-account name','sub account name','subaccount name','sub-acct name','sub_account_name'],
+    type:    ['type','account_type','account type','acct_type','acct type','classification','category'],
+    class_col: ['class','class name','classes','job','department','location','project','class_name'],
     debit:   ['debit','dr','dr.','debit_balance','debit balance','debits','ending_debit','ending debit','balance_debit','balance dr','total debit','debit total','debit amount','total_debit'],
     credit:  ['credit','cr','cr.','credit_balance','credit balance','credits','ending_credit','ending credit','balance_credit','balance cr','total credit','credit total','credit amount','total_credit'],
     balance: ['balance','net_balance','net balance','net','amount','ending_balance','ending balance','total','ytd balance','period balance'],
-    dcflag:  ['dc','d/c','debit/credit','dr/cr','normal_balance','normal balance','type','dr cr'],
+    dcflag:  ['dc','d/c','debit/credit','dr/cr','normal_balance','normal balance','dr cr'],
     date:    ['date','transaction date','trans date','trans_date','post date','posting date','entry date','tran date'],
-    memo:    ['memo','detail','narration','particulars','reference','ref','description','desc','note'],
+    memo:    ['memo','detail','narration','particulars','reference','ref','note'],
   };
 
   const findCol = (headers, field) => {
@@ -865,6 +871,7 @@ function UploadGLModal({ engId, onClose, onImported }) {
       const norm = h.toLowerCase().trim().replace(/[\s_]+/g,' ');
       if (aliases.includes(norm)) return h;
     }
+    // partial match fallback
     for (const h of headers) {
       const norm = h.toLowerCase().trim();
       if (aliases.some(a => norm.includes(a) || a.includes(norm))) return h;
@@ -872,6 +879,7 @@ function UploadGLModal({ engId, onClose, onImported }) {
     return null;
   };
 
+  // ── Account type inference ─────────────────────────────────────
   const inferType = (code, name) => {
     const num = parseInt((code||'').toString().replace(/\D/g,'').substring(0,4)) || 0;
     const nm = (name||'').toLowerCase();
@@ -890,27 +898,54 @@ function UploadGLModal({ engId, onClose, onImported }) {
     return 'OTHER';
   };
 
-  const cleanNum = (s) => parseFloat((s||'0').toString().replace(/[\$,\s\(\)]/g,'').replace(/\((.+)\)/,'\u2212$1')) || 0;
+  // ── Clean numeric string ───────────────────────────────────────
+  const cleanNum = (s) => parseFloat((s||'0').toString().replace(/[\$,\s\(\)]/g,'').replace(/\((.+)\)/,'−$1')) || 0;
 
+  // ── Detect & map raw rows → account list ──────────────────────
   const detectAndMap = (rawRows) => {
     if (!rawRows || rawRows.length === 0) return { accounts:[], format:'Empty', msg:'No data rows found.' };
+
+    // Strip totally blank rows
     const rows = rawRows.filter(r => Object.values(r).some(v => v !== '' && v !== null && v !== undefined));
     if (!rows.length) return { accounts:[], format:'Empty', msg:'No data rows found.' };
+
     const headers = Object.keys(rows[0]);
     const codeCol   = findCol(headers, 'code');
     const nameCol   = findCol(headers, 'name');
+    const subNameCol= findCol(headers, 'subname');
     const drCol     = findCol(headers, 'debit');
     const crCol     = findCol(headers, 'credit');
     const balCol    = findCol(headers, 'balance');
     const dcCol     = findCol(headers, 'dcflag');
     const dateCol   = findCol(headers, 'date');
     const typeCol   = findCol(headers, 'type');
+
+    // Helper: resolve name + code from a row (handles QuickBooks "Parent:SubCode" notation)
+    const resolveNameCode = (row) => {
+      let code = codeCol ? (row[codeCol]||'').toString().trim() : '';
+      const rawName = nameCol ? (row[nameCol]||'').toString().trim() : '';
+      const subName = subNameCol ? (row[subNameCol]||'').toString().trim() : '';
+      let name = rawName;
+      // QB sub-account pattern: "Parent Account:SubCode" in name col, actual name in subname col
+      if (rawName.includes(':') && subName) {
+        const afterColon = rawName.split(':').pop().trim();
+        if (/^\d/.test(afterColon) && !code) code = afterColon;
+        name = subName;
+      } else if (rawName.includes(':') && !subName) {
+        // "Parent: Child Account" pattern with no separate subname col
+        name = rawName.split(':').pop().trim() || rawName;
+      }
+      return { code, name };
+    };
+
     const identifierCol = nameCol || codeCol || headers[0];
     const VALID_TYPES = ['ASSET','LIABILITY','EQUITY','INCOME','COGS','EXPENSE','OTHER'];
+
     let accounts = [];
     let format = 'Trial Balance';
 
     if (dateCol) {
+      // ── Detailed GL: aggregate transactions per account ─────────
       format = 'Detailed General Ledger';
       const acctMap = {};
       for (const row of rows) {
@@ -937,12 +972,13 @@ function UploadGLModal({ engId, onClose, onImported }) {
         unadj_dr: Math.round(a.dr*100)/100,
         unadj_cr: Math.round(a.cr*100)/100,
       }));
+
     } else if (drCol && crCol) {
+      // ── Trial Balance with separate DR / CR columns ─────────────
       format = 'Trial Balance (Debit / Credit)';
       for (const row of rows) {
-        const name = (row[identifierCol]||'').toString().trim();
+        const { code, name } = resolveNameCode(row);
         if (!name || /^total|^grand total|^subtotal/i.test(name)) continue;
-        const code = codeCol ? (row[codeCol]||'').toString().trim() : '';
         const rawType = (row[typeCol]||'').toString().toUpperCase().trim();
         accounts.push({
           code, name,
@@ -951,12 +987,13 @@ function UploadGLModal({ engId, onClose, onImported }) {
           unadj_cr: Math.abs(cleanNum(row[crCol])),
         });
       }
+
     } else if (balCol) {
+      // ── Trial Balance with single net balance column ────────────
       format = 'Trial Balance (Net Balance)';
       for (const row of rows) {
-        const name = (row[identifierCol]||'').toString().trim();
+        const { code, name } = resolveNameCode(row);
         if (!name || /^total|^grand total|^subtotal/i.test(name)) continue;
-        const code = codeCol ? (row[codeCol]||'').toString().trim() : '';
         const bal = cleanNum(row[balCol]);
         const dc = (row[dcCol]||'').toString().toUpperCase().trim();
         const rawType = (row[typeCol]||'').toString().toUpperCase().trim();
@@ -971,7 +1008,9 @@ function UploadGLModal({ engId, onClose, onImported }) {
         }
         accounts.push({ code, name, type: inferredType, unadj_dr: Math.round(dr*100)/100, unadj_cr: Math.round(cr*100)/100 });
       }
+
     } else {
+      // ── Fallback: try to find any numeric columns as DR/CR ──────
       format = 'Auto-detected';
       const numCols = headers.filter(h => {
         const vals = rows.slice(0,5).map(r=>cleanNum(r[h])).filter(n=>n!==0);
@@ -979,9 +1018,8 @@ function UploadGLModal({ engId, onClose, onImported }) {
       });
       const guessedDr = numCols[0], guessedCr = numCols[1];
       for (const row of rows) {
-        const name = (row[identifierCol]||'').toString().trim();
+        const { code, name } = resolveNameCode(row);
         if (!name || /^total|^grand total|^subtotal/i.test(name)) continue;
-        const code = codeCol ? (row[codeCol]||'').toString().trim() : '';
         accounts.push({
           code, name,
           type: inferType(code, name),
@@ -990,13 +1028,32 @@ function UploadGLModal({ engId, onClose, onImported }) {
         });
       }
     }
+
+    // Remove zero-balance empty rows
     accounts = accounts.filter(a => a.name && (a.unadj_dr!==0||a.unadj_cr!==0||a.code));
     return { accounts, format, colMap:{ codeCol, nameCol, drCol, crCol, balCol, dateCol } };
   };
 
+  // ── File parsers ───────────────────────────────────────────────
   const parseCSV = (file) => new Promise((resolve, reject) => {
+    // Build flat alias list for preamble detection
+    const allAliasWords = Object.values(ALIASES).flat().map(a => a.toLowerCase());
+    const isHeaderRow = (line) => {
+      const cells = line.split(',').map(c => c.trim().toLowerCase().replace(/^"|"$/g,''));
+      const matches = cells.filter(c => c && allAliasWords.some(a => a === c || (c.length > 2 && a.length > 2 && (c.includes(a) || a.includes(c))))).length;
+      return matches >= 2;
+    };
     Papa.parse(file, {
       header: true, skipEmptyLines: 'greedy',
+      beforeFirstChunk: (chunk) => {
+        const lines = chunk.split('\n');
+        for (let i = 0; i < Math.min(lines.length, 20); i++) {
+          if (isHeaderRow(lines[i])) {
+            return i > 0 ? lines.slice(i).join('\n') : chunk;
+          }
+        }
+        return chunk;
+      },
       complete: ({data}) => resolve(data),
       error: (err) => reject(err),
     });
@@ -1008,6 +1065,7 @@ function UploadGLModal({ engId, onClose, onImported }) {
     reader.onload = (e) => {
       try {
         const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+        // Try each sheet, use the first with data
         for (const sheetName of wb.SheetNames) {
           const ws = wb.Sheets[sheetName];
           const data = XLSX.utils.sheet_to_json(ws, {defval:'', raw:false});
@@ -1145,7 +1203,7 @@ function UploadGLModal({ engId, onClose, onImported }) {
 // ═══════════════════════════════════════════════════════════════
 // ADJUSTING ENTRIES TAB
 // ═══════════════════════════════════════════════════════════════
-function AdjEntriesTab({ eng, accounts, headers, lines, reload }) {
+function AdjEntriesTab({ eng, accounts, headers, lines, classes, reload }) {
   const { toast, isStaff } = useApp();
   const [showNew, setShowNew] = useState(false);
   const [expanded, setExpanded] = useState({});
@@ -1188,11 +1246,22 @@ function AdjEntriesTab({ eng, accounts, headers, lines, reload }) {
                 {open && (
                   <div style={{borderTop:'1px solid var(--border)',padding:'8px 14px'}}>
                     <table style={{width:'100%',fontSize:12}}>
-                      <thead><tr><th style={{padding:'4px 8px',textAlign:'left'}}>Account</th><th style={{padding:'4px 8px',textAlign:'right'}}>DR</th><th style={{padding:'4px 8px',textAlign:'right'}}>CR</th></tr></thead>
+                      <thead><tr>
+                        <th style={{padding:'4px 8px',textAlign:'left'}}>Account</th>
+                        {classes.length>0 && <th style={{padding:'4px 8px',textAlign:'left'}}>Class</th>}
+                        <th style={{padding:'4px 8px',textAlign:'right'}}>DR</th>
+                        <th style={{padding:'4px 8px',textAlign:'right'}}>CR</th>
+                      </tr></thead>
                       <tbody>
                         {hLines.map(l=>{
                           const acct = accounts.find(a=>a.id===l.account_id);
-                          return <tr key={l.id}><td style={{padding:'3px 8px'}}>{acct?.name||'Unknown'}</td><td style={{padding:'3px 8px',textAlign:'right'}}>{Number(l.dr)>0?fmt(l.dr):''}</td><td style={{padding:'3px 8px',textAlign:'right'}}>{Number(l.cr)>0?fmt(l.cr):''}</td></tr>;
+                          const cls = classes.find(c=>c.id===l.class_id);
+                          return <tr key={l.id}>
+                            <td style={{padding:'3px 8px'}}>{acct?.name||'Unknown'}</td>
+                            {classes.length>0 && <td style={{padding:'3px 8px'}}>{cls?<span className="tag tag-blue" style={{fontSize:10}}>{cls.name}</span>:'—'}</td>}
+                            <td style={{padding:'3px 8px',textAlign:'right'}}>{Number(l.dr)>0?fmt(l.dr):''}</td>
+                            <td style={{padding:'3px 8px',textAlign:'right'}}>{Number(l.cr)>0?fmt(l.cr):''}</td>
+                          </tr>;
                         })}
                       </tbody>
                     </table>
@@ -1204,20 +1273,20 @@ function AdjEntriesTab({ eng, accounts, headers, lines, reload }) {
         </div>
       )}
 
-      {showNew && <NewAJEModal eng={eng} accounts={accounts} onClose={()=>setShowNew(false)} onSaved={()=>{reload();setShowNew(false);}}/>}
+      {showNew && <NewAJEModal eng={eng} accounts={accounts} classes={classes} onClose={()=>setShowNew(false)} onSaved={()=>{reload();setShowNew(false);}}/>}
     </div>
   );
 }
 
-function NewAJEModal({ eng, accounts, onClose, onSaved }) {
+function NewAJEModal({ eng, accounts, classes, onClose, onSaved }) {
   const { toast, session } = useApp();
   const [header, setHeader] = useState({ date: new Date().toISOString().slice(0,10), reference:'', memo:'' });
-  const [lines, setLines] = useState([{account_id:'',dr:0,cr:0},{account_id:'',dr:0,cr:0}]);
+  const [lines, setLines] = useState([{account_id:'',class_id:'',dr:0,cr:0},{account_id:'',class_id:'',dr:0,cr:0}]);
   const [loading, setLoading] = useState(false);
 
   const setH = (k,v) => setHeader(h=>({...h,[k]:v}));
   const setL = (i,k,v) => setLines(ls => ls.map((l,j)=>j===i?{...l,[k]:v}:l));
-  const addLine = () => setLines(ls=>[...ls,{account_id:'',dr:0,cr:0}]);
+  const addLine = () => setLines(ls=>[...ls,{account_id:'',class_id:'',dr:0,cr:0}]);
   const remLine = (i) => setLines(ls=>ls.filter((_,j)=>j!==i));
 
   const totDr = lines.reduce((s,l)=>s+Number(l.dr||0),0);
@@ -1234,7 +1303,7 @@ function NewAJEModal({ eng, accounts, onClose, onSaved }) {
     }).select().single();
     if (hErr) { toast(hErr.message,'error'); setLoading(false); return; }
     const { error: lErr } = await sb.from('aje_lines').insert(
-      validLines.map(l=>({ aje_header_id: hData.id, account_id: l.account_id, dr: Number(l.dr)||0, cr: Number(l.cr)||0 }))
+      validLines.map(l=>({ aje_header_id: hData.id, account_id: l.account_id, dr: Number(l.dr)||0, cr: Number(l.cr)||0, class_id: l.class_id||null }))
     );
     if (lErr) { toast(lErr.message,'error'); setLoading(false); return; }
     // Log action
@@ -1253,23 +1322,29 @@ function NewAJEModal({ eng, accounts, onClose, onSaved }) {
           </div>
           <div className="form-row"><label>Memo</label><input value={header.memo} onChange={e=>setH('memo',e.target.value)} placeholder="Depreciation adjustment"/></div>
           <div className="divider"/>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 100px 100px 28px',gap:6,fontSize:12,fontWeight:700,color:'var(--muted)',marginBottom:4}}>
-            <span>Account</span><span style={{textAlign:'right'}}>DR</span><span style={{textAlign:'right'}}>CR</span><span/>
+          <div style={{display:'grid',gridTemplateColumns:`1fr ${classes.length?'110px ':''} 95px 95px 28px`,gap:6,fontSize:12,fontWeight:700,color:'var(--muted)',marginBottom:4}}>
+            <span>Account</span>{classes.length>0&&<span>Class</span>}<span style={{textAlign:'right'}}>DR</span><span style={{textAlign:'right'}}>CR</span><span/>
           </div>
           {lines.map((l,i)=>(
-            <div key={i} style={{display:'grid',gridTemplateColumns:'1fr 100px 100px 28px',gap:6,marginBottom:6}}>
+            <div key={i} style={{display:'grid',gridTemplateColumns:`1fr ${classes.length?'110px ':''} 95px 95px 28px`,gap:6,marginBottom:6}}>
               <select value={l.account_id} onChange={e=>setL(i,'account_id',e.target.value)}>
                 <option value="">Select account…</option>
                 {accounts.map(a=><option key={a.id} value={a.id}>{a.code?`${a.code} · `:''}{a.name}</option>)}
               </select>
+              {classes.length>0 && (
+                <select value={l.class_id} onChange={e=>setL(i,'class_id',e.target.value)}>
+                  <option value="">No class</option>
+                  {classes.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              )}
               <input type="number" value={l.dr||''} placeholder="0.00" onChange={e=>{setL(i,'dr',e.target.value);if(e.target.value)setL(i,'cr',0);}} style={{textAlign:'right'}}/>
               <input type="number" value={l.cr||''} placeholder="0.00" onChange={e=>{setL(i,'cr',e.target.value);if(e.target.value)setL(i,'dr',0);}} style={{textAlign:'right'}}/>
               <button className="btn btn-ghost btn-icon" onClick={()=>remLine(i)} disabled={lines.length<=2}><Ic.X/></button>
             </div>
           ))}
           <button className="btn btn-ghost btn-sm" onClick={addLine}><Ic.Plus/> Add Line</button>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 100px 100px 28px',gap:6,marginTop:8,fontSize:12,fontWeight:700}}>
-            <span style={{textAlign:'right',gridColumn:'1/2'}}>Totals:</span>
+          <div style={{display:'grid',gridTemplateColumns:`1fr ${classes.length?'110px ':''} 95px 95px 28px`,gap:6,marginTop:8,fontSize:12,fontWeight:700}}>
+            <span style={{textAlign:'right',gridColumn:classes.length?'1/3':'1/2'}}>Totals:</span>
             <span style={{textAlign:'right',color:balanced?'var(--success)':'var(--danger)'}}>{fmt(totDr)}</span>
             <span style={{textAlign:'right',color:balanced?'var(--success)':'var(--danger)'}}>{fmt(totCr)}</span>
             <span/>
@@ -1400,147 +1475,99 @@ function TaxMappingTab({ eng, accounts, mappings, getAdjBal, reload }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// REPORTS TAB
+// REPORTS TAB — sub-tabbed: Overview + 5 financial statements
 // ═══════════════════════════════════════════════════════════════
-function ReportsTab({ eng, accounts, adjMap, headers, mappings, getAdjBal, reload }) {
+function ReportsTab({ eng, accounts, adjMap, headers, ajeLines, mappings, classes, getAdjBal, reload }) {
+  const [subTab, setSubTab] = useState('overview');
+  const subTabs = [['overview','Overview'],['wtb','Working TB'],['gl','General Ledger'],['bs','Balance Sheet'],['pl','Profit & Loss'],['cf','Cash Flow']];
+  return (
+    <div>
+      <div className="tabs" style={{marginBottom:16}}>
+        {subTabs.map(([k,l])=>(
+          <div key={k} className={`tab ${subTab===k?'active':''}`} onClick={()=>setSubTab(k)} style={{fontSize:12}}>{l}</div>
+        ))}
+      </div>
+      {subTab==='overview' && <ReportsOverview eng={eng} accounts={accounts} adjMap={adjMap} headers={headers} mappings={mappings} getAdjBal={getAdjBal} reload={reload}/>}
+      {subTab==='wtb'      && <WorkingTBReport eng={eng} accounts={accounts} adjMap={adjMap} getAdjBal={getAdjBal} classes={classes}/>}
+      {subTab==='gl'       && <GeneralLedgerReport eng={eng} accounts={accounts} headers={headers} ajeLines={ajeLines} classes={classes}/>}
+      {subTab==='bs'       && <BalanceSheetReport eng={eng} accounts={accounts} getAdjBal={getAdjBal}/>}
+      {subTab==='pl'       && <PLReport eng={eng} accounts={accounts} getAdjBal={getAdjBal}/>}
+      {subTab==='cf'       && <CashFlowReport eng={eng} accounts={accounts} adjMap={adjMap} ajeLines={ajeLines} headers={headers} getAdjBal={getAdjBal}/>}
+    </div>
+  );
+}
+
+// ── Overview (exports + KPIs) ────────────────────────────────
+function ReportsOverview({ eng, accounts, adjMap, headers, mappings, getAdjBal, reload }) {
   const { toast, session } = useApp();
   const [beanLoading, setBeanLoading] = useState(false);
   const [drakeLoading, setDrakeLoading] = useState(false);
   const [beanPreview, setBeanPreview] = useState('');
-
   const getAdj = (a) => adjMap[a.id] || {dr:0,cr:0};
 
-  // Client-side Drake XLSX export (no API needed for basic version)
   const exportDrake = async () => {
     setDrakeLoading(true);
     try {
       const currentMap = {};
       mappings.forEach(m => { currentMap[m.account_id] = m.tax_line; });
-
       const wb = XLSX.utils.book_new();
-
-      // Sheet 1: Info
-      const info = [
-        ['Client', eng.client_name],
-        ['Fiscal Year', eng.fiscal_year],
-        ['Entity Type', eng.entity_type],
-        ['Export Date', new Date().toLocaleDateString('en-US')],
-        ['Prepared By', 'Ledgerline Cloud'],
-      ];
+      const info = [['Client',eng.client_name],['Fiscal Year',eng.fiscal_year],['Entity Type',eng.entity_type],['Export Date',new Date().toLocaleDateString('en-US')],['Prepared By','Ledgerline Cloud']];
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(info), 'Info');
-
-      // Sheet 2: Trial Balance Detail
-      const tbHeaders = ['Code','Account Name','Type','Unadj DR','Unadj CR','Adj DR','Adj CR','Final DR','Final CR','Drake Line'];
-      const tbRows = accounts.map(a => {
-        const adj = getAdj(a);
-        const bal = getAdjBal(a);
-        return [
-          a.code, a.name, a.type,
-          Number(a.unadj_dr)||0, Number(a.unadj_cr)||0,
-          adj.dr, adj.cr,
-          bal>0?bal:0, bal<0?Math.abs(bal):0,
-          currentMap[a.id]||''
-        ];
-      });
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([tbHeaders,...tbRows]), 'Trial Balance');
-
-      // Sheet 3: By Drake Tax Line
+      const tbH = ['Code','Account Name','Type','Unadj DR','Unadj CR','Adj DR','Adj CR','Final DR','Final CR','Drake Line'];
+      const tbR = accounts.map(a=>{const adj=getAdj(a);const bal=getAdjBal(a);return[a.code,a.name,a.type,Number(a.unadj_dr)||0,Number(a.unadj_cr)||0,adj.dr,adj.cr,bal>0?bal:0,bal<0?Math.abs(bal):0,currentMap[a.id]||''];});
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([tbH,...tbR]), 'Trial Balance');
       const lineMap = {};
-      accounts.forEach(a => {
-        const line = currentMap[a.id];
-        if (!line) return;
-        const bal = getAdjBal(a);
-        if (!lineMap[line]) lineMap[line] = 0;
-        lineMap[line] += bal;
-      });
-      const taxLines = DRAKE_LINES[eng.entity_type]?.lines || [];
-      const byLine = [['Drake Line','Description','Amount']];
-      taxLines.forEach(l => {
-        if (lineMap[l.code] !== undefined) byLine.push([l.code, l.label, lineMap[l.code]]);
-      });
+      accounts.forEach(a=>{const line=currentMap[a.id];if(!line)return;const bal=getAdjBal(a);if(!lineMap[line])lineMap[line]=0;lineMap[line]+=bal;});
+      const taxLines = DRAKE_LINES[eng.entity_type]?.lines||[];
+      const byLine=[['Drake Line','Description','Amount']];
+      taxLines.forEach(l=>{if(lineMap[l.code]!==undefined)byLine.push([l.code,l.label,lineMap[l.code]]);});
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(byLine), 'By Tax Line');
-
       XLSX.writeFile(wb, `${eng.client_name}_${eng.fiscal_year}_Drake.xlsx`);
-      // Log
-      await sb.from('audit_log').insert({ engagement_id: eng.id, user_id: session.user.id, action:'drake_exported' });
+      await sb.from('audit_log').insert({engagement_id:eng.id,user_id:session.user.id,action:'drake_exported'});
       toast('Drake export downloaded','success');
-    } catch(e) {
-      toast(e.message,'error');
-    }
+    } catch(e){toast(e.message,'error');}
     setDrakeLoading(false);
   };
 
-  // Build beancount via Python API (or generate client-side fallback)
   const buildBeancount = async () => {
     setBeanLoading(true);
     try {
       const token = (await sb.auth.getSession()).data.session?.access_token;
-      // Try the Python API first
       const payload = {
-        engagement: { id: eng.id, client_name: eng.client_name, fiscal_year: eng.fiscal_year, entity_type: eng.entity_type },
-        accounts: accounts.map(a=>({...a, unadj_dr:Number(a.unadj_dr), unadj_cr:Number(a.unadj_cr)})),
-        aje_headers: headers,
-        aje_lines: Object.entries(adjMap).flatMap(([aid, adj])=>[
-          ...(adj.dr>0?[{account_id:aid,dr:adj.dr,cr:0}]:[]),
-          ...(adj.cr>0?[{account_id:aid,dr:0,cr:adj.cr}]:[]),
-        ]),
-        tax_mappings: mappings,
+        engagement:{id:eng.id,client_name:eng.client_name,fiscal_year:eng.fiscal_year,entity_type:eng.entity_type},
+        accounts:accounts.map(a=>({...a,unadj_dr:Number(a.unadj_dr),unadj_cr:Number(a.unadj_cr)})),
+        aje_headers:headers, aje_lines:[], tax_mappings:mappings,
       };
-
       let beancountText;
       try {
-        const resp = await fetch(`${API_BASE}/build-beancount`, {
-          method:'POST', headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},
-          body: JSON.stringify(payload), signal: AbortSignal.timeout(10000)
-        });
-        if (!resp.ok) throw new Error(await resp.text());
-        const data = await resp.json();
-        beancountText = data.beancount;
-      } catch {
-        // Client-side fallback
-        beancountText = buildBeancountClientSide(eng, accounts, headers, adjMap, mappings);
-      }
-
+        const resp = await fetch(`${API_BASE}/build-beancount`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},body:JSON.stringify(payload),signal:AbortSignal.timeout(10000)});
+        if(!resp.ok)throw new Error(await resp.text());
+        beancountText=(await resp.json()).beancount;
+      } catch { beancountText=buildBeancountClientSide(eng,accounts,headers,adjMap,mappings); }
       setBeanPreview(beancountText);
-      // Save to Supabase
-      await sb.from('engagements').update({ beancount_content: beancountText }).eq('id', eng.id);
+      await sb.from('engagements').update({beancount_content:beancountText}).eq('id',eng.id);
       toast('Beancount file generated','success');
-    } catch(e) {
-      toast(e.message,'error');
-    }
+    } catch(e){toast(e.message,'error');}
     setBeanLoading(false);
   };
 
   const downloadBeancount = () => {
-    if (!beanPreview) return;
-    const blob = new Blob([beanPreview], {type:'text/plain'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href=url; a.download=`${eng.client_name}_${eng.fiscal_year}.beancount`; a.click();
-    URL.revokeObjectURL(url);
+    const blob=new Blob([beanPreview],{type:'text/plain'});const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');a.href=url;a.download=`${eng.client_name}_${eng.fiscal_year}.beancount`;a.click();URL.revokeObjectURL(url);
   };
-
   const exportCSV = () => {
-    const rows = [['Code','Account','Type','Unadj DR','Unadj CR','Adj DR','Adj CR','Final DR','Final CR']];
-    accounts.forEach(a=>{
-      const adj=getAdj(a), bal=getAdjBal(a);
-      rows.push([a.code,a.name,a.type,a.unadj_dr,a.unadj_cr,adj.dr,adj.cr,bal>0?bal:0,bal<0?Math.abs(bal):0]);
-    });
-    const csv = rows.map(r=>r.join(',')).join('\n');
-    const blob = new Blob([csv],{type:'text/csv'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href=url; a.download=`${eng.client_name}_${eng.fiscal_year}_TB.csv`; a.click();
-    URL.revokeObjectURL(url);
+    const rows=[['Code','Account','Type','Unadj DR','Unadj CR','Adj DR','Adj CR','Final DR','Final CR']];
+    accounts.forEach(a=>{const adj=getAdj(a),bal=getAdjBal(a);rows.push([a.code,a.name,a.type,a.unadj_dr,a.unadj_cr,adj.dr,adj.cr,bal>0?bal:0,bal<0?Math.abs(bal):0]);});
+    const csv=rows.map(r=>r.join(',')).join('\n');const blob=new Blob([csv],{type:'text/csv'});const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');a.href=url;a.download=`${eng.client_name}_${eng.fiscal_year}_TB.csv`;a.click();URL.revokeObjectURL(url);
     toast('CSV downloaded','success');
   };
 
-  // KPIs
-  const totAssets = accounts.filter(a=>a.type==='ASSET').reduce((s,a)=>s+Math.max(0,getAdjBal(a)),0);
-  const totLiab = accounts.filter(a=>a.type==='LIABILITY').reduce((s,a)=>s+Math.abs(Math.min(0,getAdjBal(a))),0);
-  const totIncome = accounts.filter(a=>['INCOME'].includes(a.type)).reduce((s,a)=>s+Math.abs(getAdjBal(a)),0);
-  const totExpense = accounts.filter(a=>['EXPENSE','COGS'].includes(a.type)).reduce((s,a)=>s+Math.abs(getAdjBal(a)),0);
-  const netIncome = totIncome - totExpense;
+  const totAssets=accounts.filter(a=>a.type==='ASSET').reduce((s,a)=>s+Math.max(0,getAdjBal(a)),0);
+  const totLiab=accounts.filter(a=>a.type==='LIABILITY').reduce((s,a)=>s+Math.abs(Math.min(0,getAdjBal(a))),0);
+  const totIncome=accounts.filter(a=>a.type==='INCOME').reduce((s,a)=>s+Math.abs(getAdjBal(a)),0);
+  const totExpense=accounts.filter(a=>['EXPENSE','COGS'].includes(a.type)).reduce((s,a)=>s+Math.abs(getAdjBal(a)),0);
+  const netIncome=totIncome-totExpense;
 
   return (
     <div>
@@ -1551,27 +1578,475 @@ function ReportsTab({ eng, accounts, adjMap, headers, mappings, getAdjBal, reloa
         <div className="kpi-card"><div className="kpi-label">Expenses</div><div className="kpi-value neg">{fmt(totExpense)}</div></div>
         <div className="kpi-card"><div className="kpi-label">Net Income</div><div className={`kpi-value ${netIncome>=0?'pos':'neg'}`}>{fmt(netIncome)}</div></div>
       </div>
-
       <div className="card" style={{padding:20,marginBottom:16}}>
         <div style={{fontWeight:700,marginBottom:12}}>Export Files</div>
         <div className="flex-gap" style={{flexWrap:'wrap'}}>
           <button className="btn btn-secondary" onClick={exportCSV}><Ic.Down/> TB as CSV</button>
-          <button className="btn btn-primary" onClick={exportDrake} disabled={drakeLoading}>
-            {drakeLoading?<span className="spinner"/>:<><Ic.Down/> Drake XLSX</>}
-          </button>
-          <button className="btn btn-secondary" onClick={buildBeancount} disabled={beanLoading}>
-            {beanLoading?<span className="spinner"/>:<><Ic.Refresh/> Generate Beancount</>}
-          </button>
-          {beanPreview && <button className="btn btn-secondary" onClick={downloadBeancount}><Ic.Down/> Download .beancount</button>}
+          <button className="btn btn-primary" onClick={exportDrake} disabled={drakeLoading}>{drakeLoading?<span className="spinner"/>:<><Ic.Down/> Drake XLSX</>}</button>
+          <button className="btn btn-secondary" onClick={buildBeancount} disabled={beanLoading}>{beanLoading?<span className="spinner"/>:<><Ic.Refresh/> Generate Beancount</>}</button>
+          {beanPreview&&<button className="btn btn-secondary" onClick={downloadBeancount}><Ic.Down/> Download .beancount</button>}
         </div>
       </div>
-
-      {beanPreview && (
+      {beanPreview&&(
         <div className="card" style={{padding:16}}>
           <div style={{fontWeight:700,marginBottom:8,fontSize:13}}>Beancount Preview</div>
-          <pre style={{fontSize:11,lineHeight:1.5,overflow:'auto',maxHeight:400,background:'#f8f7f3',padding:12,borderRadius:4,border:'1px solid var(--border)'}}>{beanPreview.slice(0,3000)}{beanPreview.length>3000?'\n…(truncated for preview)':''}</pre>
+          <pre style={{fontSize:11,lineHeight:1.5,overflow:'auto',maxHeight:400,background:'#f8f7f3',padding:12,borderRadius:4,border:'1px solid var(--border)'}}>{beanPreview.slice(0,3000)}{beanPreview.length>3000?'\n…(truncated)':''}</pre>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Working TB ───────────────────────────────────────────────
+function WorkingTBReport({ eng, accounts, adjMap, getAdjBal, classes }) {
+  const getAdj = (a) => adjMap[a.id]||{dr:0,cr:0};
+  const typeOrder = ['ASSET','LIABILITY','EQUITY','INCOME','COGS','EXPENSE','OTHER'];
+  const grouped = {};
+  accounts.forEach(a=>{const t=a.type||'OTHER';if(!grouped[t])grouped[t]=[];grouped[t].push(a);});
+  return (
+    <div>
+      <div style={{fontWeight:700,fontSize:15,marginBottom:12}}>{eng.client_name} — Working Trial Balance FY{eng.fiscal_year}</div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Code</th><th>Account</th><th>Type</th>
+            <th className="num">Unadj DR</th><th className="num">Unadj CR</th>
+            <th className="num">Adj DR</th><th className="num">Adj CR</th>
+            <th className="num">Final Balance</th>
+          </tr></thead>
+          <tbody>
+            {typeOrder.map(type=>{
+              const accts=grouped[type]||[];
+              if(!accts.length)return null;
+              const subDr=accts.reduce((s,a)=>s+Math.max(0,getAdjBal(a)),0);
+              const subCr=accts.reduce((s,a)=>s+Math.abs(Math.min(0,getAdjBal(a))),0);
+              return (
+                <React.Fragment key={type}>
+                  <tr style={{background:'#f5f4ef'}}>
+                    <td colSpan="8" style={{fontWeight:700,fontSize:11,textTransform:'uppercase',letterSpacing:'.5px',color:'var(--muted)',padding:'6px 12px'}}>{type}</td>
+                  </tr>
+                  {accts.map(a=>{
+                    const adj=getAdj(a);const bal=getAdjBal(a);
+                    return (
+                      <tr key={a.id}>
+                        <td style={{color:'var(--muted)',fontFamily:'monospace',paddingLeft:20,fontSize:11}}>{a.code}</td>
+                        <td style={{paddingLeft:4}}>{a.name}</td>
+                        <td></td>
+                        <td className="num">{Number(a.unadj_dr)>0?fmt(a.unadj_dr):''}</td>
+                        <td className="num">{Number(a.unadj_cr)>0?fmt(a.unadj_cr):''}</td>
+                        <td className="num" style={{color:'var(--success)'}}>{adj.dr>0?fmt(adj.dr):''}</td>
+                        <td className="num" style={{color:'var(--danger)'}}>{adj.cr>0?fmt(adj.cr):''}</td>
+                        <td className="num" style={{fontWeight:600,color:bal<0?'var(--danger)':'inherit'}}>
+                          {bal!==0?(bal<0?`(${fmt(Math.abs(bal))})`:fmt(bal)):''}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  <tr style={{background:'#ece9e0',fontWeight:700,fontSize:12}}>
+                    <td colSpan="7" style={{textAlign:'right',paddingRight:12}}>Total {type}:</td>
+                    <td className="num">{fmt(subDr||subCr)}</td>
+                  </tr>
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── General Ledger ───────────────────────────────────────────
+function GeneralLedgerReport({ eng, accounts, headers, ajeLines, classes }) {
+  const [acctFilter, setAcctFilter] = useState('');
+  const [classFilter, setClassFilter] = useState('');
+  const linesByAcct = {};
+  ajeLines.forEach(l=>{if(!linesByAcct[l.account_id])linesByAcct[l.account_id]=[];linesByAcct[l.account_id].push(l);});
+  const acctDisplay = acctFilter ? accounts.filter(a=>a.id===acctFilter) : accounts.filter(a=>linesByAcct[a.id]);
+  return (
+    <div>
+      <div style={{display:'flex',gap:8,marginBottom:12,flexWrap:'wrap',alignItems:'center'}}>
+        <strong style={{fontSize:15}}>General Ledger (AJE Detail)</strong>
+        <select value={acctFilter} onChange={e=>setAcctFilter(e.target.value)} style={{width:'auto',minWidth:200}}>
+          <option value="">All Accounts</option>
+          {accounts.filter(a=>linesByAcct[a.id]).map(a=><option key={a.id} value={a.id}>{a.code?`${a.code} · `:''}{a.name}</option>)}
+        </select>
+        {classes.length>0&&<select value={classFilter} onChange={e=>setClassFilter(e.target.value)} style={{width:'auto'}}>
+          <option value="">All Classes</option>
+          {classes.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>}
+      </div>
+      {acctDisplay.length===0?(
+        <div className="empty">No adjusting entries posted yet.</div>
+      ):(
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          {acctDisplay.map(a=>{
+            let acctLines=linesByAcct[a.id]||[];
+            if(classFilter)acctLines=acctLines.filter(l=>l.class_id===classFilter);
+            if(!acctLines.length&&classFilter)return null;
+            acctLines=[...acctLines].sort((x,y)=>{
+              const hx=headers.find(h=>h.id===x.aje_header_id);
+              const hy=headers.find(h=>h.id===y.aje_header_id);
+              return (hx?.date||'').localeCompare(hy?.date||'');
+            });
+            const unadjBal=Number(a.unadj_dr||0)-Number(a.unadj_cr||0);
+            let runBal=unadjBal;
+            return (
+              <div key={a.id} className="card" style={{overflow:'hidden'}}>
+                <div style={{padding:'8px 14px',background:'#f5f4ef',borderBottom:'1px solid var(--border)',display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+                  {a.code&&<span style={{fontFamily:'monospace',fontSize:12,color:'var(--muted)'}}>{a.code}</span>}
+                  <strong>{a.name}</strong>
+                  <span style={{fontSize:11,color:'var(--muted)',fontWeight:600}}>{a.type}</span>
+                  <span style={{marginLeft:'auto',fontSize:12,color:'var(--muted)'}}>Unadj: <strong style={{color:'inherit'}}>{fmt(unadjBal)}</strong></span>
+                </div>
+                <table style={{width:'100%',fontSize:12}}>
+                  <thead><tr>
+                    <th style={{padding:'4px 12px',textAlign:'left'}}>Date</th>
+                    <th style={{padding:'4px 12px',textAlign:'left'}}>Ref</th>
+                    <th style={{padding:'4px 12px',textAlign:'left'}}>Memo</th>
+                    {classes.length>0&&<th style={{padding:'4px 12px',textAlign:'left'}}>Class</th>}
+                    <th style={{padding:'4px 12px',textAlign:'right'}}>DR</th>
+                    <th style={{padding:'4px 12px',textAlign:'right'}}>CR</th>
+                    <th style={{padding:'4px 12px',textAlign:'right'}}>Balance</th>
+                  </tr></thead>
+                  <tbody>
+                    {acctLines.map(l=>{
+                      const h=headers.find(hh=>hh.id===l.aje_header_id);
+                      runBal+=Number(l.dr||0)-Number(l.cr||0);
+                      const cls=classes.find(c=>c.id===l.class_id);
+                      return (
+                        <tr key={l.id} style={{borderBottom:'1px solid #f0efe9'}}>
+                          <td style={{padding:'3px 12px',color:'var(--muted)'}}>{h?.date||''}</td>
+                          <td style={{padding:'3px 12px',fontFamily:'monospace',fontSize:11,color:'var(--muted)'}}>{h?.reference||'—'}</td>
+                          <td style={{padding:'3px 12px',color:'var(--muted)',fontSize:11}}>{h?.memo||''}</td>
+                          {classes.length>0&&<td style={{padding:'3px 12px'}}>{cls?<span className="tag tag-blue" style={{fontSize:10}}>{cls.name}</span>:'—'}</td>}
+                          <td style={{padding:'3px 12px',textAlign:'right',color:'var(--success)'}}>{Number(l.dr)>0?fmt(l.dr):''}</td>
+                          <td style={{padding:'3px 12px',textAlign:'right',color:'var(--danger)'}}>{Number(l.cr)>0?fmt(l.cr):''}</td>
+                          <td style={{padding:'3px 12px',textAlign:'right',fontWeight:600,color:runBal<0?'var(--danger)':'inherit'}}>{fmt(runBal)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── shared: load comparison engagement data ──────────────────
+async function loadCompareEngagement(engId) {
+  const [accR, ajeHR] = await Promise.all([
+    sb.from('accounts').select('*').eq('engagement_id',engId),
+    sb.from('aje_headers').select('id').eq('engagement_id',engId),
+  ]);
+  const accs = accR.data||[];
+  const hids = ajeHR.data?.map(h=>h.id)||[];
+  let lines = [];
+  if (hids.length) { const r = await sb.from('aje_lines').select('*').in('aje_header_id',hids); lines=r.data||[]; }
+  const am = {};
+  lines.forEach(l=>{ if(!am[l.account_id])am[l.account_id]={dr:0,cr:0}; am[l.account_id].dr+=Number(l.dr||0); am[l.account_id].cr+=Number(l.cr||0); });
+  const getBal = (a) => { const adj=am[a.id]||{dr:0,cr:0}; return (Number(a.unadj_dr||0)-Number(a.unadj_cr||0))+adj.dr-adj.cr; };
+  return { accs, getBal };
+}
+
+// ── Balance Sheet ────────────────────────────────────────────
+function BalanceSheetReport({ eng, accounts, getAdjBal }) {
+  const [compareEngId, setCompareEngId] = useState('');
+  const [compareData, setCompareData] = useState(null);
+  const [allEngs, setAllEngs] = useState([]);
+  const [showPct, setShowPct] = useState(false);
+
+  useEffect(()=>{ sb.from('engagements').select('id,client_name,fiscal_year').order('fiscal_year',{ascending:false}).then(({data})=>setAllEngs((data||[]).filter(e=>e.id!==eng.id))); },[eng.id]);
+  useEffect(()=>{ if(!compareEngId){setCompareData(null);return;} loadCompareEngagement(compareEngId).then(setCompareData); },[compareEngId]);
+
+  const hasCmp = !!compareData;
+  const cmpEng = allEngs.find(e=>e.id===compareEngId);
+  const cols = hasCmp?(showPct?5:4):2;
+
+  const netIncome = accounts.filter(a=>['INCOME','COGS','EXPENSE'].includes(a.type)).reduce((s,a)=>s+(a.type==='INCOME'?Math.abs(getAdjBal(a)):-Math.abs(getAdjBal(a))),0);
+  const cmpNetIncome = hasCmp ? compareData.accs.filter(a=>['INCOME','COGS','EXPENSE'].includes(a.type)).reduce((s,a)=>s+(a.type==='INCOME'?Math.abs(compareData.getBal(a)):-Math.abs(compareData.getBal(a))),0) : null;
+
+  const filterByRange=(accts,min,max)=>accts.filter(a=>{const n=parseInt((a.code||'').replace(/\D/g,'').substring(0,4))||0;return n===0||(n>=min&&n<max);});
+  const matchCmp=(a)=>hasCmp?compareData.accs.find(ca=>(a.code&&ca.code===a.code)||ca.name===a.name):null;
+
+  const bsGroups=[
+    {header:'ASSETS',sign:1,sections:[
+      {label:'Current Assets',types:['ASSET'],range:[1000,1500]},
+      {label:'Non-Current Assets',types:['ASSET'],range:[1500,2000]},
+    ]},
+    {header:'LIABILITIES & EQUITY',sign:-1,sections:[
+      {label:'Current Liabilities',types:['LIABILITY'],range:[2000,2500]},
+      {label:'Long-Term Liabilities',types:['LIABILITY'],range:[2500,3000]},
+      {label:'Equity',types:['EQUITY'],range:[0,9999]},
+    ]},
+  ];
+
+  const chg=(a,b)=>a-b; const pctFmt=(v,b)=>b?`${v>=0?'+':''}${((v/Math.abs(b))*100).toFixed(1)}%`:'—';
+
+  return (
+    <div>
+      <div className="flex-between" style={{marginBottom:12,flexWrap:'wrap',gap:8}}>
+        <strong style={{fontSize:15}}>Balance Sheet — {eng.client_name} FY{eng.fiscal_year}</strong>
+        <div className="flex-gap" style={{flexWrap:'wrap'}}>
+          {allEngs.length>0&&<select value={compareEngId} onChange={e=>setCompareEngId(e.target.value)} style={{width:'auto',minWidth:180}}>
+            <option value="">Compare to…</option>
+            {allEngs.map(e=><option key={e.id} value={e.id}>{e.client_name} FY{e.fiscal_year}</option>)}
+          </select>}
+          {hasCmp&&<label style={{display:'flex',alignItems:'center',gap:4,textTransform:'none',fontSize:12,fontWeight:'normal',letterSpacing:0}}>
+            <input type="checkbox" checked={showPct} onChange={e=>setShowPct(e.target.checked)} style={{width:'auto'}}/> % Change
+          </label>}
+        </div>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr>
+            <th style={{width:60}}>Code</th><th>Account</th>
+            <th className="num">FY{eng.fiscal_year}</th>
+            {hasCmp&&<th className="num" style={{color:'var(--muted)'}}>FY{cmpEng?.fiscal_year||'Prior'}</th>}
+            {hasCmp&&<th className="num">$ Change</th>}
+            {hasCmp&&showPct&&<th className="num">% Change</th>}
+          </tr></thead>
+          <tbody>
+            {bsGroups.map(group=>(
+              <React.Fragment key={group.header}>
+                <tr style={{background:'var(--green)',color:'#fff'}}><td colSpan={cols} style={{fontWeight:700,padding:'6px 12px',letterSpacing:'.5px'}}>{group.header}</td></tr>
+                {group.sections.map(sec=>{
+                  const accts=filterByRange(accounts.filter(a=>sec.types.includes(a.type)),sec.range[0],sec.range[1]);
+                  if(!accts.length)return null;
+                  const total=accts.reduce((s,a)=>s+getAdjBal(a)*group.sign,0);
+                  let cmpTotal=null;
+                  if(hasCmp){
+                    const ca=filterByRange(compareData.accs.filter(a=>sec.types.includes(a.type)),sec.range[0],sec.range[1]);
+                    cmpTotal=ca.reduce((s,a)=>s+compareData.getBal(a)*group.sign,0);
+                  }
+                  return (
+                    <React.Fragment key={sec.label}>
+                      <tr style={{background:'#f5f4ef'}}><td colSpan={cols} style={{fontWeight:700,fontSize:11,padding:'5px 12px',color:'var(--muted)',textTransform:'uppercase',letterSpacing:'.3px'}}>{sec.label}</td></tr>
+                      {accts.map(a=>{
+                        const bal=getAdjBal(a)*group.sign;
+                        const cmp=matchCmp(a);const cmpBal=cmp?compareData.getBal(cmp)*group.sign:hasCmp?0:undefined;
+                        const d=cmpBal!==undefined?chg(bal,cmpBal):undefined;
+                        return (
+                          <tr key={a.id}>
+                            <td style={{paddingLeft:20,color:'var(--muted)',fontFamily:'monospace',fontSize:11}}>{a.code}</td>
+                            <td>{a.name}</td>
+                            <td className="num">{fmt(bal)}</td>
+                            {hasCmp&&<td className="num" style={{color:'var(--muted)'}}>{cmpBal!==undefined?fmt(cmpBal):''}</td>}
+                            {hasCmp&&<td className="num" style={{color:d>=0?'var(--success)':'var(--danger)'}}>{d!==undefined?fmt(Math.abs(d)):''}</td>}
+                            {hasCmp&&showPct&&<td className="num" style={{color:d>=0?'var(--success)':'var(--danger)'}}>{d!==undefined?pctFmt(d,cmpBal):''}</td>}
+                          </tr>
+                        );
+                      })}
+                      {group.header==='LIABILITIES & EQUITY'&&sec.label==='Equity'&&(
+                        <tr>
+                          <td style={{paddingLeft:20,fontFamily:'monospace',fontSize:11,color:'var(--muted)'}}></td>
+                          <td style={{fontStyle:'italic',color:'var(--muted)'}}>Net Income (current year)</td>
+                          <td className="num">{fmt(netIncome)}</td>
+                          {hasCmp&&<td className="num" style={{color:'var(--muted)'}}>{cmpNetIncome!==null?fmt(cmpNetIncome):''}</td>}
+                          {hasCmp&&<td className="num" style={{color:(netIncome-(cmpNetIncome||0))>=0?'var(--success)':'var(--danger)'}}>{fmt(Math.abs(netIncome-(cmpNetIncome||0)))}</td>}
+                          {hasCmp&&showPct&&<td className="num">{pctFmt(netIncome-(cmpNetIncome||0),cmpNetIncome)}</td>}
+                        </tr>
+                      )}
+                      <tr style={{fontWeight:700,borderTop:'2px solid var(--border)'}}>
+                        <td colSpan="2" style={{textAlign:'right',paddingRight:12}}>Total {sec.label}:</td>
+                        <td className="num">{fmt(total+(group.header==='LIABILITIES & EQUITY'&&sec.label==='Equity'?netIncome:0))}</td>
+                        {hasCmp&&<td className="num" style={{color:'var(--muted)'}}>{cmpTotal!==null?fmt(cmpTotal+(group.header==='LIABILITIES & EQUITY'&&sec.label==='Equity'?(cmpNetIncome||0):0)):''}</td>}
+                        {hasCmp&&<td className="num"/>}{hasCmp&&showPct&&<td className="num"/>}
+                      </tr>
+                    </React.Fragment>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </tbody>
+          <tfoot>
+            {[
+              ['TOTAL ASSETS', accounts.filter(a=>a.type==='ASSET').reduce((s,a)=>s+Math.max(0,getAdjBal(a)),0), hasCmp?compareData.accs.filter(a=>a.type==='ASSET').reduce((s,a)=>s+Math.max(0,compareData.getBal(a)),0):null],
+              ['TOTAL LIABILITIES & EQUITY',
+                accounts.filter(a=>['LIABILITY','EQUITY'].includes(a.type)).reduce((s,a)=>s+Math.abs(Math.min(0,getAdjBal(a))),0)+netIncome,
+                hasCmp?compareData.accs.filter(a=>['LIABILITY','EQUITY'].includes(a.type)).reduce((s,a)=>s+Math.abs(Math.min(0,compareData.getBal(a))),0)+(cmpNetIncome||0):null
+              ],
+            ].map(([label,val,cmp])=>(
+              <tr key={label} style={{background:'var(--green2)',color:'#fff',fontWeight:700,fontSize:14}}>
+                <td colSpan="2" style={{padding:'7px 12px',textAlign:'right'}}>{label}</td>
+                <td className="num" style={{padding:'7px 12px'}}>{fmt(val)}</td>
+                {hasCmp&&<td className="num" style={{padding:'7px 12px'}}>{cmp!==null?fmt(cmp):''}</td>}
+                {hasCmp&&<td className="num" style={{padding:'7px 12px',color:val-cmp>=0?'#90ee90':'#ffb6c1'}}>{cmp!==null?fmt(Math.abs(val-cmp)):''}</td>}
+                {hasCmp&&showPct&&<td className="num" style={{padding:'7px 12px'}}>{cmp?pctFmt(val-cmp,cmp):''}</td>}
+              </tr>
+            ))}
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Profit & Loss ────────────────────────────────────────────
+function PLReport({ eng, accounts, getAdjBal }) {
+  const [compareEngId, setCompareEngId] = useState('');
+  const [compareData, setCompareData] = useState(null);
+  const [allEngs, setAllEngs] = useState([]);
+  const [showPct, setShowPct] = useState(false);
+
+  useEffect(()=>{ sb.from('engagements').select('id,client_name,fiscal_year').order('fiscal_year',{ascending:false}).then(({data})=>setAllEngs((data||[]).filter(e=>e.id!==eng.id))); },[eng.id]);
+  useEffect(()=>{ if(!compareEngId){setCompareData(null);return;} loadCompareEngagement(compareEngId).then(setCompareData); },[compareEngId]);
+
+  const hasCmp=!!compareData;const cmpEng=allEngs.find(e=>e.id===compareEngId);
+  const cols=hasCmp?(showPct?5:4):2;
+  const pctFmt=(v,b)=>b?`${v>=0?'+':''}${((v/Math.abs(b))*100).toFixed(1)}%`:'—';
+
+  const plSec=[{type:'INCOME',label:'Revenue'},{type:'COGS',label:'Cost of Goods Sold'},{type:'EXPENSE',label:'Operating Expenses'}];
+  const tot={},cmpTot={};
+  plSec.forEach(s=>{
+    tot[s.type]=accounts.filter(a=>a.type===s.type).reduce((sum,a)=>sum+Math.abs(getAdjBal(a)),0);
+    if(hasCmp)cmpTot[s.type]=compareData.accs.filter(a=>a.type===s.type).reduce((sum,a)=>sum+Math.abs(compareData.getBal(a)),0);
+  });
+  const gp=tot.INCOME-tot.COGS; const ni=gp-tot.EXPENSE;
+  const cmpGp=hasCmp?cmpTot.INCOME-cmpTot.COGS:null; const cmpNi=hasCmp?cmpGp-cmpTot.EXPENSE:null;
+
+  const SubRow=({label,val,cmp,bold})=>{
+    const d=cmp!=null?val-cmp:null;
+    return <tr style={{background:'#f0efe9',fontWeight:bold?700:500,borderTop:'1px solid var(--border)'}}>
+      <td style={{textAlign:'right',paddingRight:12,fontSize:bold?14:13}}>{label}</td>
+      <td className="num" style={{fontSize:bold?14:13}}>{fmt(val)}</td>
+      {hasCmp&&<td className="num" style={{color:'var(--muted)',fontSize:bold?14:13}}>{cmp!=null?fmt(cmp):''}</td>}
+      {hasCmp&&<td className="num" style={{color:d>=0?'var(--success)':'var(--danger)',fontSize:bold?14:13}}>{d!=null?fmt(Math.abs(d)):''}</td>}
+      {hasCmp&&showPct&&<td className="num" style={{color:d>=0?'var(--success)':'var(--danger)'}}>{d!=null?pctFmt(d,cmp):''}</td>}
+    </tr>;
+  };
+
+  return (
+    <div>
+      <div className="flex-between" style={{marginBottom:12,flexWrap:'wrap',gap:8}}>
+        <strong style={{fontSize:15}}>Profit & Loss — {eng.client_name} FY{eng.fiscal_year}</strong>
+        <div className="flex-gap">
+          {allEngs.length>0&&<select value={compareEngId} onChange={e=>setCompareEngId(e.target.value)} style={{width:'auto',minWidth:180}}>
+            <option value="">Compare to…</option>
+            {allEngs.map(e=><option key={e.id} value={e.id}>{e.client_name} FY{e.fiscal_year}</option>)}
+          </select>}
+          {hasCmp&&<label style={{display:'flex',alignItems:'center',gap:4,textTransform:'none',fontSize:12,fontWeight:'normal',letterSpacing:0}}>
+            <input type="checkbox" checked={showPct} onChange={e=>setShowPct(e.target.checked)} style={{width:'auto'}}/> % Change
+          </label>}
+        </div>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Account</th><th className="num">FY{eng.fiscal_year}</th>
+            {hasCmp&&<th className="num" style={{color:'var(--muted)'}}>FY{cmpEng?.fiscal_year||'Prior'}</th>}
+            {hasCmp&&<th className="num">$ Change</th>}
+            {hasCmp&&showPct&&<th className="num">% Change</th>}
+          </tr></thead>
+          <tbody>
+            {plSec.map((sec,si)=>{
+              const accts=accounts.filter(a=>a.type===sec.type);
+              if(!accts.length)return null;
+              return (
+                <React.Fragment key={sec.type}>
+                  <tr style={{background:'var(--green)',color:'#fff'}}><td colSpan={cols} style={{fontWeight:700,padding:'5px 12px',letterSpacing:'.3px'}}>{sec.label}</td></tr>
+                  {accts.map(a=>{
+                    const bal=Math.abs(getAdjBal(a));
+                    const ca=hasCmp?compareData.accs.find(ca=>(a.code&&ca.code===a.code)||ca.name===a.name):null;
+                    const cmpBal=ca?Math.abs(compareData.getBal(ca)):hasCmp?0:undefined;
+                    const d=cmpBal!==undefined?bal-cmpBal:undefined;
+                    return (
+                      <tr key={a.id}>
+                        <td style={{paddingLeft:16}}>{a.code&&<span style={{fontFamily:'monospace',fontSize:11,color:'var(--muted)',marginRight:8}}>{a.code}</span>}{a.name}</td>
+                        <td className="num">{fmt(bal)}</td>
+                        {hasCmp&&<td className="num" style={{color:'var(--muted)'}}>{cmpBal!==undefined?fmt(cmpBal):''}</td>}
+                        {hasCmp&&<td className="num" style={{color:d>=0?'var(--success)':'var(--danger)'}}>{d!==undefined?fmt(Math.abs(d)):''}</td>}
+                        {hasCmp&&showPct&&<td className="num" style={{color:d>=0?'var(--success)':'var(--danger)'}}>{d!==undefined?pctFmt(d,cmpBal):''}</td>}
+                      </tr>
+                    );
+                  })}
+                  <SubRow label={`Total ${sec.label}`} val={tot[sec.type]} cmp={hasCmp?cmpTot[sec.type]:null} bold={false}/>
+                  {si===1&&<SubRow label="GROSS PROFIT" val={gp} cmp={cmpGp} bold/>}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr style={{background:'var(--green2)',color:'#fff',fontWeight:700,fontSize:15}}>
+              <td style={{padding:'8px 12px',textAlign:'right'}}>NET INCOME</td>
+              <td className="num" style={{padding:'8px 12px'}}>{fmt(ni)}</td>
+              {hasCmp&&<td className="num" style={{padding:'8px 12px'}}>{fmt(cmpNi)}</td>}
+              {hasCmp&&<td className="num" style={{padding:'8px 12px',color:(ni-cmpNi)>=0?'#90ee90':'#ffb6c1'}}>{fmt(Math.abs(ni-(cmpNi||0)))}</td>}
+              {hasCmp&&showPct&&<td className="num" style={{padding:'8px 12px'}}>{pctFmt(ni-(cmpNi||0),cmpNi)}</td>}
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Cash Flow (Indirect Method) ──────────────────────────────
+function CashFlowReport({ eng, accounts, adjMap, ajeLines, headers, getAdjBal }) {
+  const getAdj=(a)=>adjMap[a.id]||{dr:0,cr:0};
+  const ni=accounts.filter(a=>['INCOME','COGS','EXPENSE'].includes(a.type)).reduce((s,a)=>s+(a.type==='INCOME'?Math.abs(getAdjBal(a)):-Math.abs(getAdjBal(a))),0);
+  const inRange=(a,min,max)=>{const n=parseInt((a.code||'').replace(/\D/g,'').substring(0,4))||0;return n===0||(n>=min&&n<max);};
+  const da=accounts.filter(a=>a.type==='EXPENSE'&&/deprec|amort/i.test(a.name)).reduce((s,a)=>{const adj=getAdj(a);return s+adj.dr-adj.cr;},0);
+  const curA=accounts.filter(a=>a.type==='ASSET'&&inRange(a,1000,1500));
+  const curL=accounts.filter(a=>a.type==='LIABILITY'&&inRange(a,2000,2500));
+  const ncA=accounts.filter(a=>a.type==='ASSET'&&inRange(a,1500,2000));
+  const ncL=accounts.filter(a=>a.type==='LIABILITY'&&inRange(a,2500,3000));
+  const eq=accounts.filter(a=>a.type==='EQUITY');
+  const adjNet=(accts,inv)=>accts.reduce((s,a)=>{const adj=getAdj(a);const n=adj.dr-adj.cr;return s+(inv?-n:n);},0);
+  const opA=adjNet(curA,true),opL=adjNet(curL,false);
+  const inv=adjNet(ncA,true),fin=adjNet(ncL,false)+adjNet(eq,false);
+  const opTot=ni+da+opA+opL,invTot=inv,finTot=fin,netChg=opTot+invTot+finTot;
+
+  const SH=({label})=><tr style={{background:'var(--green)',color:'#fff'}}><td colSpan="2" style={{fontWeight:700,padding:'5px 12px',letterSpacing:'.3px'}}>{label}</td></tr>;
+  const Row=({label,amt,indent,sub})=>(
+    <tr style={sub?{fontWeight:600,borderTop:'1px solid var(--border)',background:'#f5f4ef'}:{}}>
+      <td style={{paddingLeft:indent?28:12}}>{label}</td>
+      <td className="num" style={{color:amt<0?'var(--danger)':amt===0?'var(--muted)':'inherit'}}>{amt!==0?fmt(amt):'—'}</td>
+    </tr>
+  );
+
+  return (
+    <div>
+      <div style={{marginBottom:12}}>
+        <strong style={{fontSize:15}}>Cash Flow Statement (Indirect) — {eng.client_name} FY{eng.fiscal_year}</strong>
+        <div style={{fontSize:12,color:'var(--muted)',marginTop:4}}>Note: Based on adjusting journal entries only. A full cash flow requires complete transaction history.</div>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>Description</th><th className="num">Amount</th></tr></thead>
+          <tbody>
+            <SH label="OPERATING ACTIVITIES"/>
+            <Row label="Net Income" amt={ni} indent/>
+            {da!==0&&<Row label="Depreciation & Amortization" amt={da} indent/>}
+            {(curA.some(a=>{const adj=getAdj(a);return adj.dr-adj.cr!==0;})||curL.some(a=>{const adj=getAdj(a);return adj.dr-adj.cr!==0;}))&&(
+              <tr style={{background:'#f8f7f3'}}><td colSpan="2" style={{padding:'3px 12px 2px 16px',fontSize:11,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'.5px'}}>Changes in Working Capital (from AJEs):</td></tr>
+            )}
+            {curA.map(a=>{const adj=getAdj(a);const n=-(adj.dr-adj.cr);if(!n)return null;return <Row key={a.id} label={`${a.name}`} amt={n} indent/>;}).filter(Boolean)}
+            {curL.map(a=>{const adj=getAdj(a);const n=adj.dr-adj.cr;if(!n)return null;return <Row key={a.id} label={`${a.name}`} amt={n} indent/>;}).filter(Boolean)}
+            <Row label="Net Cash from Operating Activities" amt={opTot} sub/>
+
+            <SH label="INVESTING ACTIVITIES"/>
+            {ncA.map(a=>{const adj=getAdj(a);const n=-(adj.dr-adj.cr);if(!n)return null;return <Row key={a.id} label={a.name} amt={n} indent/>;}).filter(Boolean)}
+            {invTot===0&&<tr><td colSpan="2" style={{padding:'6px 28px',color:'var(--muted)',fontSize:12,fontStyle:'italic'}}>No investing activity from AJEs</td></tr>}
+            <Row label="Net Cash from Investing Activities" amt={invTot} sub/>
+
+            <SH label="FINANCING ACTIVITIES"/>
+            {[...ncL,...eq].map(a=>{const adj=getAdj(a);const n=adj.dr-adj.cr;if(!n)return null;return <Row key={a.id} label={a.name} amt={n} indent/>;}).filter(Boolean)}
+            {finTot===0&&<tr><td colSpan="2" style={{padding:'6px 28px',color:'var(--muted)',fontSize:12,fontStyle:'italic'}}>No financing activity from AJEs</td></tr>}
+            <Row label="Net Cash from Financing Activities" amt={finTot} sub/>
+          </tbody>
+          <tfoot>
+            <tr style={{background:'var(--green2)',color:'#fff',fontWeight:700,fontSize:15}}>
+              <td style={{padding:'8px 12px'}}>NET CHANGE IN CASH</td>
+              <td className="num" style={{padding:'8px 12px'}}>{fmt(netChg)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
     </div>
   );
 }
@@ -1605,6 +2080,74 @@ function buildBeancountClientSide(eng, accounts, headers, adjMap, mappings) {
   lines.push(`  Equity:OpeningBalances ${plug.toFixed(2)} USD`);
   lines.push('');
   return lines.join('\n');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CLASS MANAGEMENT TAB
+// ═══════════════════════════════════════════════════════════════
+function ClassManagement({ eng, classes, reload }) {
+  const { toast, isStaff } = useApp();
+  const [newName, setNewName] = useState('');
+  const [adding, setAdding] = useState(false);
+
+  const addClass = async () => {
+    if (!newName.trim()) return;
+    setAdding(true);
+    const { error } = await sb.from('classes').insert({ engagement_id: eng.id, name: newName.trim() });
+    if (error) { toast(error.message,'error'); } else { toast('Class added','success'); setNewName(''); reload(); }
+    setAdding(false);
+  };
+
+  const delClass = async (id) => {
+    if (!confirm('Delete this class? AJE lines assigned to it will be unassigned.')) return;
+    const { error } = await sb.from('classes').delete().eq('id',id);
+    if (error) { toast(error.message,'error'); return; }
+    toast('Class deleted','success'); reload();
+  };
+
+  return (
+    <div>
+      <div className="flex-between" style={{marginBottom:16}}>
+        <div>
+          <div className="page-title" style={{fontSize:16}}>Class Tracking</div>
+          <div className="page-sub">{classes.length} classes — assign to AJE lines for department, location, or project tracking</div>
+        </div>
+      </div>
+      {isStaff && (
+        <div style={{display:'flex',gap:8,marginBottom:20}}>
+          <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Class name (e.g., Operations, Sales, R&D, Location A…)" style={{maxWidth:360}}
+            onKeyDown={e=>e.key==='Enter'&&addClass()}/>
+          <button className="btn btn-primary btn-sm" onClick={addClass} disabled={adding||!newName.trim()}>
+            {adding?<span className="spinner"/>:<><Ic.Plus/> Add Class</>}
+          </button>
+        </div>
+      )}
+      {classes.length===0 ? (
+        <div className="empty" style={{border:'2px dashed var(--border)',borderRadius:8,padding:48}}>
+          <div style={{fontSize:36,marginBottom:12}}>🏷️</div>
+          <div style={{fontSize:14,fontWeight:600,marginBottom:6}}>No classes defined yet</div>
+          <div style={{fontSize:13,color:'var(--muted)',maxWidth:420,margin:'0 auto'}}>
+            Classes let you track revenue and expenses by department, location, or project — similar to QuickBooks class tracking. Once created, you can assign a class to each line of an adjusting journal entry.
+          </div>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Class Name</th><th>Created</th>{isStaff&&<th></th>}</tr></thead>
+            <tbody>
+              {classes.map(c=>(
+                <tr key={c.id}>
+                  <td><span className="tag tag-blue">{c.name}</span></td>
+                  <td style={{color:'var(--muted)',fontSize:12}}>{fmtDate(c.created_at)}</td>
+                  {isStaff&&<td><button className="btn btn-ghost btn-sm btn-icon" onClick={()=>delClass(c.id)} title="Delete class"><Ic.X/></button></td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════
