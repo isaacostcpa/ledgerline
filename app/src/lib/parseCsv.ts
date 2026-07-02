@@ -45,7 +45,14 @@ export function parseCsvText(text: string): RawRow[] {
   return (result.data ?? []).filter((r) => r && typeof r === 'object');
 }
 
-/** Parse an uploaded CSV/TSV/text file into rows. */
-export function parseCsvFile(file: File): Promise<RawRow[]> {
-  return file.text().then(parseCsvText);
+/** Parse CSV text into a positional matrix of string cells (no header keying).
+ * Needed for layouts where structure is positional — notably the QuickBooks
+ * General Ledger report, whose account names sit in an unlabeled first column. */
+export function parseCsvMatrix(text: string): string[][] {
+  const cleaned = stripPreamble(text);
+  const result = Papa.parse<string[]>(cleaned, {
+    header: false,
+    skipEmptyLines: 'greedy',
+  });
+  return (result.data ?? []).map((row) => (Array.isArray(row) ? row.map((c) => (c ?? '').toString()) : []));
 }

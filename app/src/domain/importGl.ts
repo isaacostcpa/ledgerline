@@ -23,6 +23,7 @@ export interface ImportedAccount {
 }
 
 export type ImportFormat =
+  | 'QuickBooks General Ledger'
   | 'Detailed General Ledger'
   | 'Trial Balance (Debit / Credit)'
   | 'Trial Balance (Net Balance)'
@@ -108,8 +109,9 @@ export function inferType(code: string, name: string): AccountType {
   if (num >= 4000 && num < 5000) return 'INCOME';
   if (num >= 5000 && num < 6000) return 'COGS';
   if (num >= 6000 && num < 9000) return 'EXPENSE';
-  if (/cash|bank|receiv|invent|prepaid|equipment|vehicle|property|deposit|asset|investment|securities|due from/.test(nm)) return 'ASSET';
-  if (/payable|loan|mortgage|accrued|liability|note payable|deferred revenue|due to|line of credit|debt/.test(nm)) return 'LIABILITY';
+  if (/credit card|amex|american express|visa|mastercard|line of credit/.test(nm)) return 'LIABILITY';
+  if (/cash|bank|checking|savings|money market|brokerage|receiv|invent|prepaid|equipment|vehicle|property|deposit|asset|investment|securities|due from|undeposited/.test(nm)) return 'ASSET';
+  if (/payable|loan|mortgage|accrued|liability|note payable|deferred revenue|due to|debt|security deposits held/.test(nm)) return 'LIABILITY';
   if (/equity|capital|retained|owner|draw|stock|member|contributed|distribution/.test(nm)) return 'EQUITY';
   if (/revenue|sales|income|service fee|fees earned|grant|interest income|other income|rental income/.test(nm)) return 'INCOME';
   if (/cost of|cogs|purchases|merchandise|cost of sales|material/.test(nm)) return 'COGS';
@@ -273,4 +275,137 @@ export function detectAndMap(rawRows: RawRow[]): ImportResult {
  * `unadjusted` dollar figure the accounts table stores. */
 export function importedToUnadjusted(a: ImportedAccount): number {
   return toDollars(toCents(a.debit) - toCents(a.credit));
+}
+
+// ─── QuickBooks General Ledger report ──────────────────────────────────────
+//
+// A QuickBooks "General Ledger" export has a very particular positional shape:
+//
+//   ,Type,Date,Num,Name,Memo,Class,Clr,Split,Debit,Credit,Balance   <- header
+//   "Cash",,,,,,,,,,,250000.00                                      <- account, beginning balance
+//   ,Check,04/01/2025,,ACME,memo,,,Rent,5000.00,,255000.00          <- transaction (running balance)
+//   ...
+//   "Total Cash",,,,,,,,,525317.96,332500.00,442817.96              <- account total (ending balance)
+//
+// The account NAME lives in the unlabeled first column on section rows; the
+// "Name" column is the payee. Balances come from the account's Total row.
+// Sub-accounts nest, and a parent emits its own Total that rolls up its
+// children — so we walk with a stack and only keep leaf sections.
+
+interface QbHeader {
+  rowIndex: number;
+  balanceIdx: number;
+  debitIdx: number;
+  creditIdx: number;
+}
+
+function findQbHeader(matrix: string[][]): QbHeader | null {
+  for (let i = 0; i < Math.min(matrix.length, 25); i++) {
+    const row = matrix[i];
+    if (!row) continue;
+    const norm = row.map((c) => (c ?? '').trim().toLowerCase());
+    const firstBlank = (norm[0] ?? '') === '';
+    const idxOf = (re: RegExp) => norm.findIndex((c) => re.test(c));
+    const balanceIdx = idxOf(/^balance$/);
+    const debitIdx = idxOf(/^debit$/);
+    const creditIdx = idxOf(/^credit$/);
+    const hasType = norm.some((c) => c === 'type');
+    if (firstBlank && hasType && balanceIdx >= 0 && debitIdx >= 0 && creditIdx >= 0) {
+      return { rowIndex: i, balanceIdx, debitIdx, creditIdx };
+    }
+  }
+  return null;
+}
+
+/** Detect a QuickBooks General Ledger report by its positional signature. */
+export function isQuickBooksGeneralLedger(matrix: string[][]): boolean {
+  return findQbHeader(matrix) !== null;
+}
+
+const TOTAL_PREFIX = /^total\b/i;
+
+/** Parse a QuickBooks General Ledger report matrix into account balances. */
+export function parseQuickBooksGeneralLedger(matrix: string[][]): ImportResult {
+  const header = findQbHeader(matrix);
+  const warnings: string[] = [];
+  if (!header) {
+    return { format: 'Empty', accounts: [], columns: {}, outOfBalance: 0, warnings };
+  }
+
+  interface Section {
+    name: string;
+    hadChild: boolean;
+  }
+  const stack: Section[] = [];
+  const leaves: { name: string; balanceCents: number }[] = [];
+
+  for (let i = header.rowIndex + 1; i < matrix.length; i++) {
+    const row = matrix[i];
+    if (!row) continue;
+    const first = (row[0] ?? '').trim();
+    if (first === '') continue; // a transaction line — balances come from Total rows
+
+    if (TOTAL_PREFIX.test(first)) {
+      const entry = stack.pop();
+      if (entry && !entry.hadChild) {
+        // A leaf account: its ending balance is this Total row's Balance cell.
+        leaves.push({ name: entry.name, balanceCents: toCents(cleanNumber(row[header.balanceIdx])) });
+      }
+      const parent = stack[stack.length - 1];
+      if (parent) parent.hadChild = true; // this total closed a child of the parent
+      continue;
+    }
+
+    // An account section header — its own name in column 0.
+    stack.push({ name: first, hadChild: false });
+  }
+
+  // Merge any accidental duplicate leaf names (defensive) and split into DR/CR.
+  const merged = new Map<string, number>();
+  for (const leaf of leaves) {
+    merged.set(leaf.name, (merged.get(leaf.name) ?? 0) + leaf.balanceCents);
+  }
+
+  let accounts: ImportedAccount[] = [...merged.entries()].map(([name, cents]) => ({
+    code: '',
+    name,
+    type: inferType('', name),
+    debit: cents >= 0 ? toDollars(cents) : 0,
+    credit: cents < 0 ? toDollars(-cents) : 0,
+  }));
+
+  accounts = accounts.filter((a) => a.name && (a.debit !== 0 || a.credit !== 0));
+
+  const outCents = accounts.reduce((s, a) => s + toCents(a.debit) - toCents(a.credit), 0);
+  const outOfBalance = toDollars(outCents);
+  if (outCents !== 0) warnings.push(`Imported trial balance is out of balance by ${outOfBalance.toFixed(2)}.`);
+  if (accounts.length === 0) warnings.push('No account sections were recognized.');
+
+  return {
+    format: 'QuickBooks General Ledger',
+    accounts,
+    columns: { name: 'Account (column 1)', balance: 'Balance' },
+    outOfBalance,
+    warnings,
+  };
+}
+
+/** Entry point for matrix-parsed CSV: routes QuickBooks GL reports to the
+ * positional parser, and everything else through the header-based detector. */
+export function importMatrix(matrix: string[][]): ImportResult {
+  if (isQuickBooksGeneralLedger(matrix)) {
+    return parseQuickBooksGeneralLedger(matrix);
+  }
+  // Header-keyed fallback: turn the matrix into objects and reuse detectAndMap.
+  const [head, ...body] = matrix;
+  if (!head) return { format: 'Empty', accounts: [], columns: {}, outOfBalance: 0, warnings: [] };
+  const headers = head.map((h, i) => (h && h.trim() ? h.trim() : `col${i}`));
+  const rows: RawRow[] = body.map((r) => {
+    const obj: RawRow = {};
+    headers.forEach((h, i) => {
+      obj[h] = r[i] ?? '';
+    });
+    return obj;
+  });
+  return detectAndMap(rows);
 }

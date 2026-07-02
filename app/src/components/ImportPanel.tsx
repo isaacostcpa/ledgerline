@@ -1,9 +1,9 @@
 import { useCallback, useRef, useState } from 'react';
-import { detectAndMap, type ImportResult } from '../domain/importGl';
+import { importMatrix, type ImportResult } from '../domain/importGl';
 import { suggestGroupCode } from '../domain/coa';
 import { formatCents } from '../domain/money';
 import { toCents } from '../domain/money';
-import { parseCsvText } from '../lib/parseCsv';
+import { parseCsvMatrix } from '../lib/parseCsv';
 import type { EngagementBundle } from '../lib/types';
 import { buildBundleFromImport } from '../data/buildBundle';
 import './import.css';
@@ -39,23 +39,24 @@ export function ImportPanel({
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const run = useCallback((rows: ReturnType<typeof parseCsvText>) => {
-    setResult(detectAndMap(rows));
+  const runText = useCallback((csv: string) => {
+    setResult(importMatrix(parseCsvMatrix(csv)));
   }, []);
 
   const analyzeText = useCallback(() => {
     if (!text.trim()) return;
-    run(parseCsvText(text));
-  }, [text, run]);
+    runText(text);
+  }, [text, runText]);
 
   const onFile = useCallback(
     async (file: File | undefined) => {
       if (!file) return;
       const content = await file.text();
-      setText(content);
-      run(parseCsvText(content));
+      // Keep the textarea readable for very large exports.
+      setText(content.length > 20000 ? `${content.slice(0, 20000)}\n…(${content.length.toLocaleString()} chars total)` : content);
+      runText(content);
     },
-    [run],
+    [runText],
   );
 
   const load = () => {
@@ -119,7 +120,7 @@ export function ImportPanel({
               type="button"
               onClick={() => {
                 setText(SAMPLE);
-                run(parseCsvText(SAMPLE));
+                runText(SAMPLE);
               }}
             >
               Load sample
