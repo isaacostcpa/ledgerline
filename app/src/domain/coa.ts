@@ -90,6 +90,7 @@ const KEYWORD_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/land|building|equipment|furniture|fixture|vehicle|leasehold/i, 'FIXED'],
   // Specific liabilities before the generic "payable" catch-all, so
   // "Note Payable" maps to NOTES and "Wages Payable" to ACCRUED, not AP.
+  [/credit card|\bamex\b|american express|visa|mastercard|discover/i, 'CC'],
   [/note|loan|mortgage|line of credit/i, 'NOTES'],
   [/payroll|wages payable|accrued/i, 'ACCRUED'],
   [/\bpayable|\ba\/?p\b/i, 'AP'],
@@ -154,6 +155,7 @@ export function defaultAccountGroups(): Omit<AccountGroup, 'id'>[] {
     g('OTHERASSET', 'Other Assets', 'ASSET', 60),
     g('AP', 'Accounts Payable', 'LIABILITY', 110),
     g('ACCRUED', 'Accrued Liabilities', 'LIABILITY', 120),
+    g('CC', 'Credit Cards', 'LIABILITY', 125),
     g('NOTES', 'Notes & Loans Payable', 'LIABILITY', 130),
     g('OTHERLIAB', 'Other Liabilities', 'LIABILITY', 140),
     g('EQUITY', 'Equity', 'EQUITY', 200),

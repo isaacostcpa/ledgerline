@@ -40,6 +40,7 @@ begin
     (new_firm_id, 'OTHERASSET', 'Other Assets',                'ASSET',      60),
     (new_firm_id, 'AP',         'Accounts Payable',            'LIABILITY', 110),
     (new_firm_id, 'ACCRUED',    'Accrued Liabilities',         'LIABILITY', 120),
+    (new_firm_id, 'CC',         'Credit Cards',                'LIABILITY', 125),
     (new_firm_id, 'NOTES',      'Notes & Loans Payable',       'LIABILITY', 130),
     (new_firm_id, 'OTHERLIAB',  'Other Liabilities',           'LIABILITY', 140),
     (new_firm_id, 'EQUITY',     'Equity',                      'EQUITY',    200),

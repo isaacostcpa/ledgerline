@@ -2,12 +2,13 @@ import { useState } from 'react';
 import { WorkingTrialBalance } from './components/WorkingTrialBalance';
 import { ImportPanel } from './components/ImportPanel';
 import { ChartOfAccounts } from './components/ChartOfAccounts';
+import { Adjustments } from './components/Adjustments';
 import { demoBundle } from './data/demo';
 import { isSupabaseConfigured } from './lib/supabase';
 import type { AccountRow, EngagementBundle } from './lib/types';
 import './app.css';
 
-type Tab = 'wtb' | 'import' | 'coa';
+type Tab = 'wtb' | 'import' | 'coa' | 'adj';
 
 export default function App() {
   // Phase 1 works against a single in-memory engagement: demo data to start,
@@ -37,7 +38,9 @@ export default function App() {
           <button className={`tab ${tab === 'coa' ? 'active' : ''}`} type="button" onClick={() => setTab('coa')}>
             Chart of Accounts
           </button>
-          <button className="tab" type="button" disabled title="Coming in a later phase">Adjustments</button>
+          <button className={`tab ${tab === 'adj' ? 'active' : ''}`} type="button" onClick={() => setTab('adj')}>
+            Adjustments
+          </button>
           <button className="tab" type="button" disabled title="Coming in a later phase">Workpapers</button>
           <button className="tab" type="button" disabled title="Coming in a later phase">Tax Mapping</button>
           <button className="tab" type="button" disabled title="Coming in a later phase">Statements</button>
@@ -71,6 +74,12 @@ export default function App() {
           <ChartOfAccounts
             bundle={bundle}
             onChange={(accounts: AccountRow[]) => setBundle({ ...bundle, accounts })}
+          />
+        )}
+        {tab === 'adj' && (
+          <Adjustments
+            bundle={bundle}
+            onChange={(patch) => setBundle({ ...bundle, ...patch })}
           />
         )}
       </main>
