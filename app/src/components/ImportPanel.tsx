@@ -3,7 +3,7 @@ import { importMatrix, type ImportResult } from '../domain/importGl';
 import { suggestGroupCode } from '../domain/coa';
 import { formatCents } from '../domain/money';
 import { toCents } from '../domain/money';
-import { parseCsvMatrix } from '../lib/parseCsv';
+import { isExcelFile, parseCsvMatrix, parseFileMatrix } from '../lib/parseCsv';
 import type { EngagementBundle } from '../lib/types';
 import { buildBundleFromImport } from '../data/buildBundle';
 import './import.css';
@@ -48,16 +48,19 @@ export function ImportPanel({
     runText(text);
   }, [text, runText]);
 
-  const onFile = useCallback(
-    async (file: File | undefined) => {
-      if (!file) return;
-      const content = await file.text();
-      // Keep the textarea readable for very large exports.
-      setText(content.length > 20000 ? `${content.slice(0, 20000)}\n…(${content.length.toLocaleString()} chars total)` : content);
-      runText(content);
-    },
-    [runText],
-  );
+  const onFile = useCallback(async (file: File | undefined) => {
+    if (!file) return;
+    if (isExcelFile(file.name)) {
+      const matrix = await parseFileMatrix(file);
+      setText(`[Excel workbook: ${file.name} — ${matrix.length.toLocaleString()} rows]`);
+      setResult(importMatrix(matrix));
+      return;
+    }
+    const content = await file.text();
+    // Keep the textarea readable for very large exports.
+    setText(content.length > 20000 ? `${content.slice(0, 20000)}\n…(${content.length.toLocaleString()} chars total)` : content);
+    runText(content);
+  }, [runText]);
 
   const load = () => {
     if (!result || result.accounts.length === 0) return;
@@ -73,8 +76,9 @@ export function ImportPanel({
         <div>
           <h2>Import General Ledger / Trial Balance</h2>
           <p className="sub">
-            Drop a CSV, paste the data, or load the sample. Ledgerline detects the
-            layout, standardizes accounts, and checks that it ties out.
+            Drop a CSV or Excel file, paste the data, or load the sample.
+            Ledgerline detects the layout — including QuickBooks GL reports —
+            standardizes accounts, and checks that it ties out.
           </p>
         </div>
       </header>
@@ -97,7 +101,7 @@ export function ImportPanel({
             className="import-text"
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Paste CSV rows here, or drag a file onto this box…"
+            placeholder="Paste CSV rows here, or drag a CSV/Excel file onto this box…"
             spellCheck={false}
             rows={8}
           />
@@ -105,7 +109,7 @@ export function ImportPanel({
             <input
               ref={fileRef}
               type="file"
-              accept=".csv,.tsv,.txt"
+              accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xlsb,.xls"
               hidden
               onChange={(e) => void onFile(e.target.files?.[0])}
             />

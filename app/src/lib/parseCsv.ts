@@ -45,6 +45,40 @@ export function parseCsvText(text: string): RawRow[] {
   return (result.data ?? []).filter((r) => r && typeof r === 'object');
 }
 
+/** Parse an Excel workbook (.xlsx/.xls) into a positional matrix of string
+ * cells from its first sheet. Structure is preserved (blank cells stay blank),
+ * so the same importMatrix() pipeline handles Excel and CSV identically. */
+export async function parseWorkbookMatrix(data: ArrayBuffer): Promise<string[][]> {
+  // Lazy-loaded so the ~430 KB SheetJS library is only fetched when an Excel
+  // file is actually chosen, keeping the initial app bundle small.
+  const XLSX = await import('xlsx');
+  const wb = XLSX.read(data, { type: 'array' });
+  const firstSheetName = wb.SheetNames[0];
+  if (!firstSheetName) return [];
+  const sheet = wb.Sheets[firstSheetName];
+  if (!sheet) return [];
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+    header: 1,
+    blankrows: false,
+    defval: '',
+    raw: false, // formatted strings, so numbers keep their displayed form
+  });
+  return rows.map((row) => (Array.isArray(row) ? row.map((c) => (c ?? '').toString()) : []));
+}
+
+/** True for filenames that are Excel workbooks rather than delimited text. */
+export function isExcelFile(name: string): boolean {
+  return /\.(xlsx|xlsm|xlsb|xls)$/i.test(name);
+}
+
+/** Parse any supported upload (CSV/TSV/text or Excel) into a matrix. */
+export async function parseFileMatrix(file: File): Promise<string[][]> {
+  if (isExcelFile(file.name)) {
+    return await parseWorkbookMatrix(await file.arrayBuffer());
+  }
+  return parseCsvMatrix(await file.text());
+}
+
 /** Parse CSV text into a positional matrix of string cells (no header keying).
  * Needed for layouts where structure is positional — notably the QuickBooks
  * General Ledger report, whose account names sit in an unlabeled first column. */
