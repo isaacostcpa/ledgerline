@@ -1,13 +1,18 @@
+import { useState } from 'react';
 import { WorkingTrialBalance } from './components/WorkingTrialBalance';
+import { ImportPanel } from './components/ImportPanel';
 import { demoBundle } from './data/demo';
 import { isSupabaseConfigured } from './lib/supabase';
+import type { EngagementBundle } from './lib/types';
 import './app.css';
 
+type Tab = 'wtb' | 'import';
+
 export default function App() {
-  // Phase 1 renders the Working Trial Balance. In demo mode we use the bundled
-  // sample engagement; a live Supabase project swaps in real firm data (auth +
-  // engagement selection land next).
-  const bundle = demoBundle;
+  // Phase 1 works against a single in-memory engagement: demo data to start,
+  // replaced live when a GL/TB is imported. (Auth + Supabase persistence next.)
+  const [bundle, setBundle] = useState<EngagementBundle>(demoBundle);
+  const [tab, setTab] = useState<Tab>('wtb');
 
   return (
     <div className="app">
@@ -22,7 +27,12 @@ export default function App() {
           <span className="wordmark">Ledgerline</span>
         </div>
         <nav className="tabs">
-          <button className="tab active" type="button">Working TB</button>
+          <button className={`tab ${tab === 'wtb' ? 'active' : ''}`} type="button" onClick={() => setTab('wtb')}>
+            Working TB
+          </button>
+          <button className={`tab ${tab === 'import' ? 'active' : ''}`} type="button" onClick={() => setTab('import')}>
+            Import
+          </button>
           <button className="tab" type="button" disabled title="Coming in a later phase">Adjustments</button>
           <button className="tab" type="button" disabled title="Coming in a later phase">Workpapers</button>
           <button className="tab" type="button" disabled title="Coming in a later phase">Tax Mapping</button>
@@ -43,7 +53,17 @@ export default function App() {
       )}
 
       <main className="content">
-        <WorkingTrialBalance bundle={bundle} />
+        {tab === 'wtb' ? (
+          <WorkingTrialBalance bundle={bundle} />
+        ) : (
+          <ImportPanel
+            base={bundle}
+            onLoad={(next) => {
+              setBundle(next);
+              setTab('wtb');
+            }}
+          />
+        )}
       </main>
     </div>
   );

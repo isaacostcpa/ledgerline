@@ -88,9 +88,11 @@ const KEYWORD_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/prepaid/i, 'PREPAID'],
   [/deprec|accumulated deprec/i, 'ACCUMDEP'],
   [/land|building|equipment|furniture|fixture|vehicle|leasehold/i, 'FIXED'],
-  [/\bpayable|\ba\/?p\b/i, 'AP'],
-  [/payroll|wages payable|accrued/i, 'ACCRUED'],
+  // Specific liabilities before the generic "payable" catch-all, so
+  // "Note Payable" maps to NOTES and "Wages Payable" to ACCRUED, not AP.
   [/note|loan|mortgage|line of credit/i, 'NOTES'],
+  [/payroll|wages payable|accrued/i, 'ACCRUED'],
+  [/\bpayable|\ba\/?p\b/i, 'AP'],
   [/capital|retained earnings|distribution|owner|member equity|common stock/i, 'EQUITY'],
   [/\bsales|revenue|income|fees earned\b/i, 'REVENUE'],
   [/cost of (goods|sales)|\bcogs\b/i, 'COGS'],
