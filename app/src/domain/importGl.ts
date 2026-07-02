@@ -260,6 +260,7 @@ export function detectAndMap(rawRows: RawRow[]): ImportResult {
 
   // Drop rows with no name and no balance and no code.
   accounts = accounts.filter((a) => a.name && (a.debit !== 0 || a.credit !== 0 || a.code));
+  accounts = mergeByName(accounts); // no duplicate account names
 
   const outCents = accounts.reduce((s, a) => s + toCents(a.debit) - toCents(a.credit), 0);
   const outOfBalance = toDollars(outCents);
@@ -275,6 +276,40 @@ export function detectAndMap(rawRows: RawRow[]): ImportResult {
  * `unadjusted` dollar figure the accounts table stores. */
 export function importedToUnadjusted(a: ImportedAccount): number {
   return toDollars(toCents(a.debit) - toCents(a.credit));
+}
+
+/**
+ * Guarantee unique account names: any accounts sharing a name (case- and
+ * whitespace-insensitive) are merged into one, netting their debit/credit so
+ * the balance is preserved. The Chart of Accounts must never hold duplicates.
+ */
+export function mergeByName(accounts: ImportedAccount[]): ImportedAccount[] {
+  const order: string[] = [];
+  // Accumulate debit/credit in cents, summed per column so an account's gross
+  // activity is preserved; only same-named accounts are combined.
+  const byKey = new Map<string, { code: string; name: string; type: AccountType; debit: number; credit: number }>();
+  for (const a of accounts) {
+    const key = a.name.trim().toLowerCase();
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.debit += toCents(a.debit);
+      existing.credit += toCents(a.credit);
+      if (!existing.code && a.code) existing.code = a.code;
+    } else {
+      order.push(key);
+      byKey.set(key, {
+        code: a.code,
+        name: a.name,
+        type: a.type,
+        debit: toCents(a.debit),
+        credit: toCents(a.credit),
+      });
+    }
+  }
+  return order.map((key) => {
+    const m = byKey.get(key)!;
+    return { code: m.code, name: m.name, type: m.type, debit: toDollars(m.debit), credit: toDollars(m.credit) };
+  });
 }
 
 // ─── QuickBooks General Ledger report ──────────────────────────────────────
@@ -360,19 +395,17 @@ export function parseQuickBooksGeneralLedger(matrix: string[][]): ImportResult {
     stack.push({ name: first, hadChild: false });
   }
 
-  // Merge any accidental duplicate leaf names (defensive) and split into DR/CR.
-  const merged = new Map<string, number>();
-  for (const leaf of leaves) {
-    merged.set(leaf.name, (merged.get(leaf.name) ?? 0) + leaf.balanceCents);
-  }
-
-  let accounts: ImportedAccount[] = [...merged.entries()].map(([name, cents]) => ({
-    code: '',
-    name,
-    type: inferType('', name),
-    debit: cents >= 0 ? toDollars(cents) : 0,
-    credit: cents < 0 ? toDollars(-cents) : 0,
-  }));
+  // Turn leaves into accounts, then merge any duplicate names (a nested parent
+  // and its own posting section can share a name) so the CoA stays unique.
+  let accounts = mergeByName(
+    leaves.map((leaf) => ({
+      code: '',
+      name: leaf.name,
+      type: inferType('', leaf.name),
+      debit: leaf.balanceCents >= 0 ? toDollars(leaf.balanceCents) : 0,
+      credit: leaf.balanceCents < 0 ? toDollars(-leaf.balanceCents) : 0,
+    })),
+  );
 
   accounts = accounts.filter((a) => a.name && (a.debit !== 0 || a.credit !== 0));
 

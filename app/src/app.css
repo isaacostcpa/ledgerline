@@ -60,8 +60,12 @@
   cursor: not-allowed;
 }
 
-.engagement-pill {
+.header-right {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+.engagement-pill {
   font-size: 12.5px;
   font-family: var(--mono);
   color: var(--cream);

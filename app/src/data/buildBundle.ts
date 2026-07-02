@@ -21,11 +21,16 @@ export function buildBundleFromImport(
 ): EngagementBundle {
   const groupByCode = new Map(groups.map((g) => [g.code, g]));
 
+  const newId = () =>
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `imp-${Math.random().toString(36).slice(2)}`;
+
   const accounts: AccountRow[] = imported.map((a, i) => {
     const suggestedCode = suggestGroupCode(a.name, a.code, a.type);
     const group = suggestedCode ? groupByCode.get(suggestedCode) : undefined;
     return {
-      id: `imp-${i}-${a.code || a.name}`.slice(0, 60),
+      id: newId(),
       firm_id: engagement.firm_id,
       engagement_id: engagement.id,
       code: a.code || String(1000 + i),

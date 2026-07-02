@@ -123,6 +123,22 @@ describe('detectAndMap — QuickBooks sub-account notation', () => {
   });
 });
 
+describe('detectAndMap — no duplicate account names', () => {
+  it('merges same-named accounts, netting their balances', () => {
+    const rows = [
+      { Code: '6000', Name: 'Office Expense', Debit: '1,000', Credit: '' },
+      { Code: '6001', Name: 'Office Expense', Debit: '500', Credit: '' },
+      { Code: '6002', Name: 'office expense', Debit: '', Credit: '200' }, // case-insensitive
+    ];
+    const r = detectAndMap(rows);
+    const office = r.accounts.filter((a) => a.name.toLowerCase() === 'office expense');
+    expect(office).toHaveLength(1); // merged to a single account
+    expect(office[0]!.debit).toBe(1500); // 1000 + 500 (gross columns summed)
+    expect(office[0]!.credit).toBe(200);
+    expect(importedToUnadjusted(office[0]!)).toBe(1300); // net balance
+  });
+});
+
 describe('detectAndMap — edge cases', () => {
   it('returns Empty for no rows', () => {
     expect(detectAndMap([]).format).toBe('Empty');
