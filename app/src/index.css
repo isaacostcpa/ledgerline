@@ -1,0 +1,113 @@
+/* ─── Ledgerline design tokens (ported from the v0 prototype) ─────────── */
+:root {
+  --green: #1d2e1d;
+  --green2: #2a4a2a;
+  --green3: #3b5f3b;
+  --cream: #f5f4ef;
+  --paper: #fbfaf6;
+  --card: #ffffff;
+  --amber: #b5713a;
+  --amber2: #9a5e2e;
+  --amber-soft: #f0e4d6;
+  --ink: #1a1a1a;
+  --muted: #6b6b5e;
+  --border: #d8d6cf;
+  --border2: #e1dfd6;
+  --danger: #c0392b;
+  --success: #27ae60;
+  --radius: 6px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --mono: 'SF Mono', 'Segoe UI Mono', 'Roboto Mono', Menlo, Consolas, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--cream);
+  -webkit-font-smoothing: antialiased;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+/* ─── Buttons ─────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--amber);
+  color: #fff;
+  border-color: var(--amber);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--amber2);
+}
+.btn-secondary {
+  background: #fff;
+  color: var(--ink);
+  border-color: var(--border);
+}
+.btn-secondary:hover:not(:disabled) {
+  background: #f0efe9;
+}
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* ─── Forms ───────────────────────────────────────────────────────────── */
+input,
+select,
+textarea {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  background: #fff;
+  color: var(--ink);
+  outline: none;
+  transition: border-color 0.15s;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--amber);
+}
+:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 1px;
+}
